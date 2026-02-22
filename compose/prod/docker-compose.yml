@@ -1,0 +1,154 @@
+name: ha-voice-agent-prod
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  vllm:
+    image: vllm/vllm-openai:v0.15.1@sha256:8c9aaddfa6011b9651d06834d2fb90bdb9ab6ced4b420ec76925024eb12b22d0
+    restart: unless-stopped
+    gpus: all
+    ipc: host
+    ports:
+      - "10100:8000"
+    environment:
+      TZ: ${TZ:-UTC}
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: ${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-1}
+    volumes:
+      - ${PROD_MODELS_DIR:-/opt/ha-voice/models}:/models
+      - ${PROD_CACHE_DIR:-/opt/ha-voice/cache}/hf:/root/.cache/huggingface
+      - ${PROD_CACHE_DIR:-/opt/ha-voice/cache}/vllm:/root/.cache/vllm
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --model
+      - ${VLLM_MODEL_PATH:-/models/llm/Qwen2.5-7B-Instruct}
+      - --served-model-name
+      - ${VLLM_SERVED_MODEL_NAME:-qwen2.5-7b-instruct}
+      - --dtype
+      - ${VLLM_DTYPE:-half}
+      - --kv-cache-dtype
+      - ${VLLM_KV_CACHE_DTYPE:-fp8}
+      - --max-model-len
+      - ${VLLM_MAX_MODEL_LEN:-32768}
+      - --max-num-batched-tokens
+      - ${VLLM_MAX_NUM_BATCHED_TOKENS:-8192}
+      - --max-num-seqs
+      - ${VLLM_MAX_NUM_SEQS:-1}
+      - --enable-chunked-prefill
+      - --swap-space
+      - ${VLLM_SWAP_SPACE:-0}
+      - --cpu-offload-gb
+      - ${VLLM_CPU_OFFLOAD_GB:-24}
+      - --gpu-memory-utilization
+      - ${VLLM_GPU_MEMORY_UTILIZATION:-0.90}
+      - --enable-prefix-caching
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - ${VLLM_TOOL_CALL_PARSER:-hermes}
+      - --chat-template-content-format
+      - ${VLLM_CHAT_TEMPLATE_CONTENT_FORMAT:-string}
+      - --disable-log-requests
+      - --uvicorn-log-level
+      - warning
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request; urllib.request.urlopen(
+          'http://127.0.0.1:8000/health', timeout=5)"
+      interval: 30s
+      timeout: 8s
+      retries: 6
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging: *default-logging
+    networks:
+      - voice
+
+  wyoming-whisper:
+    build:
+      context: ../../services/stt_faster_whisper
+    image: ${STT_IMAGE:-ha-voice-agent/wyoming-faster-whisper:local}
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "10300:10300"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${STT_MODEL_DIR_HOST:-../../models/stt}:/models/stt:ro
+    command:
+      - --uri
+      - tcp://0.0.0.0:10300
+      - --data-dir
+      - /models/stt
+      - --download-dir
+      - /models/stt
+      - --model
+      - ${STT_MODEL:-/models/stt/large-v3-ct2}
+      - --language
+      - ${STT_LANGUAGE:-en}
+      - --device
+      - ${STT_DEVICE:-cuda}
+      - --compute-type
+      - ${STT_COMPUTE_TYPE:-float16}
+      - --local-files-only
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import socket; sock = socket.create_connection(
+          ('127.0.0.1', 10300), timeout=5); sock.close()"
+      interval: 20s
+      timeout: 8s
+      retries: 6
+      start_period: 15s
+    logging: *default-logging
+    networks:
+      - voice
+
+  wyoming-piper:
+    image: rhasspy/wyoming-piper@sha256:c874e4a04657ae3381332ee5d0c8c70a310dae6722892840f530ac0890b44eb3
+    restart: unless-stopped
+    ports:
+      - "10200:10200"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${PROD_MODELS_DIR:-/opt/ha-voice/models}/tts:/data
+    command:
+      - --uri
+      - tcp://0.0.0.0:10200
+      - --data-dir
+      - /data
+      - --voice
+      - ${TTS_VOICE:-en_US-lessac-medium}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import socket; sock = socket.create_connection(
+          ('127.0.0.1', 10200), timeout=5); sock.close()"
+      interval: 20s
+      timeout: 8s
+      retries: 6
+      start_period: 15s
+    logging: *default-logging
+    networks:
+      - voice
+
+networks:
+  voice:
+    name: ha-voice-agent-prod

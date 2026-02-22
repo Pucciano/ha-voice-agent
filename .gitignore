@@ -1,0 +1,54 @@
+# Local environment files
+.env
+*.env
+!.env.example
+compose/.env
+compose/dev/.env
+compose/prod/.env
+
+# Runtime data (development)
+dev/cache/**
+!dev/cache/.gitkeep
+dev/logs/**
+!dev/logs/.gitkeep
+dev/datasets/**
+!dev/datasets/.gitkeep
+!dev/datasets/llm/.gitkeep
+!dev/datasets/stt/.gitkeep
+!dev/datasets/meta/.gitkeep
+dev/models/**
+!dev/models/.gitkeep
+!dev/models/llm/.gitkeep
+!dev/models/stt/.gitkeep
+!dev/models/tts/.gitkeep
+
+# Legacy local runtime directories
+cache/**
+!cache/.gitkeep
+models/**
+!models/.gitkeep
+!models/stt/.gitkeep
+!models/stt/large-v3-ct2/.gitkeep
+!models/tts/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editors and OS noise
+.DS_Store
+.idea/
+.vscode/*.code-workspace
+
+# Build and report artifacts
+build/
+dist/
+*.log
+*.jsonl
+!dev/datasets/**/*.jsonl

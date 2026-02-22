@@ -1,0 +1,51 @@
+[project]
+name = "ha-voice-agent"
+version = "0.1.0"
+description = "Offline-first HA voice agent with prod/dev training stack."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "ha-voice-agent contributors" }]
+
+dependencies = [
+  "fastapi==0.116.1",
+  "httpx==0.28.1",
+  "orjson==3.11.3",
+  "pydantic==2.11.9",
+  "python-dotenv==1.1.1",
+  "uvicorn[standard]==0.35.0",
+]
+
+[project.optional-dependencies]
+models = [
+  "huggingface_hub>=0.28.0,<1.0.0",
+]
+training = [
+  "datasets==4.0.0",
+  "peft==0.17.1",
+  "transformers==4.56.1",
+]
+eval = [
+  "jsonschema==4.25.1",
+  "numpy==2.3.2",
+]
+
+[tool.black]
+line-length = 80
+target-version = ["py312"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.isort]
+profile = "black"
+line_length = 80
+
+[tool.setuptools]
+packages = []
+py-modules = []
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

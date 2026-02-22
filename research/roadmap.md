@@ -33,10 +33,12 @@ services/
   llm_proxy/
 scripts/
 dev/
-  models/{llm,stt,tts}
+  models/{llm,tts}
   cache/{hf,vllm}
   logs/
   datasets/{llm,stt,meta}
+models/
+  stt/large-v3-ct2
 docs/
 training/
 THIRD_PARTY_NOTICES.md
@@ -50,7 +52,7 @@ This table will be kept accurate as configs solidify.
 |---|---:|---:|---|
 | vLLM (Qwen2.5-7B-Instruct) | prod/dev | 14–18 GB | FP16/BF16; tuned `gpu_memory_utilization`; `max_model_len` 4096–8192 |
 | KV cache | prod/dev | 2–5 GB | depends on context length + concurrency |
-| Whisper STT (GPU optional) | dev/prod optional | 0–3 GB | default CPU; GPU option is selectable |
+| Faster-Whisper STT | dev/prod | 0–3 GB | local CT2 model, GPU default |
 | TTS (Piper) | prod/dev | ~0 GB | CPU by default |
 | Safety margin / overhead | prod/dev | 1–3 GB | driver/runtime overhead |
 
@@ -84,7 +86,7 @@ This table will be kept accurate as configs solidify.
 
 ## 0) Repo hygiene + baseline project scaffolding
 
-- **Status:** planned
+- **Status:** done
 - **Goal:** establish correct repo structure, licensing, and no-secrets baseline.
 - **Deliverables:**
   - `LICENSE` (Apache-2.0 unless conflict)
@@ -97,12 +99,12 @@ This table will be kept accurate as configs solidify.
 
 ## 1) Production stack (compose/prod)
 
-- **Status:** planned
+- **Status:** in-progress
 - **Goal:** minimal overhead, minimal logs, pinned images, restart policies,
   health checks.
 - **Services:**
   - vLLM OpenAI-compatible endpoint (default model: Qwen/Qwen2.5-7B-Instruct)
-  - Wyoming STT: `rhasspy/wyoming-whisper` (CPU default)
+  - Wyoming STT: local `wyoming-faster-whisper` image (GPU default)
   - Wyoming TTS: `rhasspy/wyoming-piper`
 - **Deliverables:** `compose/prod/docker-compose.yml`.
 - **Acceptance:**
@@ -111,7 +113,7 @@ This table will be kept accurate as configs solidify.
 
 ## 2) Development stack (compose/dev + override)
 
-- **Status:** planned
+- **Status:** done
 - **Goal:** adds `llm_proxy` and dataset capture volumes; optional heavy debug
   capture via `docker-compose.override.yml`.
 - **Deliverables:**
@@ -125,7 +127,7 @@ This table will be kept accurate as configs solidify.
 
 ## 3) llm_proxy service (FastAPI, OpenAI-compatible subset)
 
-- **Status:** planned
+- **Status:** done
 - **Goal:** stabilize tool calling and capture training data.
 - **Endpoints:**
   - `GET /health`
@@ -144,7 +146,7 @@ This table will be kept accurate as configs solidify.
 
 ## 4) Scripts (models, smoke tests, utilities)
 
-- **Status:** planned
+- **Status:** done
 - **Goal:** reproducible offline-first model acquisition + sanity checks.
 - **Deliverables:**
   - `scripts/check_gpu_docker.sh`
@@ -158,7 +160,7 @@ This table will be kept accurate as configs solidify.
 
 ## 5) Dataset schema + capture
 
-- **Status:** planned
+- **Status:** done
 - **Goal:** stable JSONL schemas under `dev/datasets/{llm,stt,meta}`.
 - **Deliverables:**
   - `docs/training_pipeline.md` defines dataset schemas
@@ -168,7 +170,7 @@ This table will be kept accurate as configs solidify.
 
 ## 6) Fine-tuning scaffolding (LLM LoRA/QLoRA)
 
-- **Status:** planned
+- **Status:** done
 - **Goal:** reproducible scripts/configs for LoRA fine-tuning focusing on tool
   calling.
 - **Deliverables:**
@@ -179,7 +181,7 @@ This table will be kept accurate as configs solidify.
 
 ## 7) STT adaptation placeholder
 
-- **Status:** planned
+- **Status:** done
 - **Goal:** provide data-prep + evaluation scaffolding; full STT training is
   optional if too heavy.
 - **Deliverables:**
@@ -188,7 +190,7 @@ This table will be kept accurate as configs solidify.
 
 ## 8) Evaluation scripts
 
-- **Status:** planned
+- **Status:** done
 - **Metrics:**
   - tool-call JSON validity rate
   - “two-step” device control compliance (discover_entities => perform_action)
@@ -197,7 +199,7 @@ This table will be kept accurate as configs solidify.
 
 ## 9) Documentation (Home Assistant + MCP + operations)
 
-- **Status:** planned
+- **Status:** done
 - **Deliverables:**
   - `docs/home_assistant_setup.md`
   - `docs/mcp_assist_setup.md`
@@ -207,7 +209,7 @@ This table will be kept accurate as configs solidify.
 
 ## 10) Third-party notices
 
-- **Status:** planned
+- **Status:** done
 - **Deliverables:** `THIRD_PARTY_NOTICES.md` (licenses + pinned images/models).
 
 ---
@@ -215,3 +217,13 @@ This table will be kept accurate as configs solidify.
 # Change Log (human maintained)
 
 - 2026-02-16: initialized roadmap.
+- 2026-02-16: implemented repository scaffold and split compose stacks.
+- 2026-02-16: added llm_proxy, scripts, training/eval scaffolding, and docs.
+- 2026-02-16: runtime validation for prod/dev compose marked in-progress.
+- 2026-02-16: set dev vLLM `chat-template-content-format` default to
+  `string` for Qwen2.5 request compatibility.
+- 2026-02-16: fixed local dev vLLM model mount by materializing HF snapshot
+  symlink targets into `dev/models/llm/Qwen2.5-7B-Instruct`.
+- 2026-02-16: completed dev runtime validation (all services healthy,
+  direct/proxied chat completions HTTP 200, `healthcheck_stack.sh` and
+  `smoke_test_llm_proxy.sh` passed).
