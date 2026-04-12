@@ -1,0 +1,56 @@
+services:
+  llm-proxy:
+    environment:
+      LLM_PROXY_LOG_LEVEL: DEBUG
+      LLM_PROXY_ENABLE_CAPTURE: "true"
+      LLM_PROXY_CAPTURE_DIR: /datasets/llm
+    volumes:
+      - ../../dev/datasets/llm:/datasets/llm
+      - ../../dev/datasets/meta:/datasets/meta
+      - ../../dev/logs:/logs
+
+  wyoming-whisper:
+    gpus: all
+    command:
+      - --uri
+      - tcp://0.0.0.0:10300
+      - --data-dir
+      - /models/stt
+      - --download-dir
+      - /models/stt
+      - --model
+      - ${STT_MODEL:-/models/stt/large-v3-ct2}
+      - --language
+      - ${STT_LANGUAGE:-en}
+      - --device
+      - ${STT_DEVICE_OVERRIDE:-cuda}
+      - --compute-type
+      - ${STT_COMPUTE_TYPE_OVERRIDE:-float16}
+      - --local-files-only
+      - --debug
+
+  wyoming-piper:
+    command:
+      - --uri
+      - tcp://0.0.0.0:10200
+      - --data-dir
+      - /data
+      - --voice
+      - ${TTS_VOICE:-en_US-lessac-medium}
+      - --debug
+
+  stt-packet-capture:
+    image: nicolaka/netshoot:latest
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        tcpdump -i any -s 0 -w /captures/stt_capture.pcap tcp port 10300
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ../../dev/logs:/captures
+    networks:
+      - voice

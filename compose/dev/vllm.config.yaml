@@ -1,0 +1,29 @@
+# /opt/ha-voice/dev/compose/vllm.config.yaml
+
+model: /models/llm/Qwen3-8B
+served-model-name:
+  - aivi-8b-instruct
+
+host: 0.0.0.0
+port: 8000
+uvicorn-log-level: warning
+disable-log-requests: true
+
+dtype: half
+kv-cache-dtype: auto
+max-model-len: 16384
+
+max-num-batched-tokens: 2048
+max-num-seqs: 1
+enable-chunked-prefill: true
+enable-prefix-caching: true
+
+swap-space: 24
+cpu-offload-gb: 0
+gpu-memory-utilization: 0.90
+
+chat-template-content-format: string
+enable-auto-tool-choice: true
+tool-call-parser: hermes
+
+#tool-server: 192.168.30.10:8090

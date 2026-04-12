@@ -1,0 +1,160 @@
+name: ha-voice-agent-dev
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  vllm:
+    image: vllm/vllm-openai:v0.15.1@sha256:8c9aaddfa6011b9651d06834d2fb90bdb9ab6ced4b420ec76925024eb12b22d0
+    restart: unless-stopped
+    gpus: all
+    ipc: host
+    ports:
+      - "10100:8000"
+    environment:
+      TZ: ${TZ:-UTC}
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: ${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-1}
+      LD_LIBRARY_PATH: >-
+        ${VLLM_LD_LIBRARY_PATH:-/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu}
+      LD_PRELOAD: ${VLLM_LD_PRELOAD:-/usr/lib/x86_64-linux-gnu/libcuda.so.1}
+    volumes:
+      - ../../compose/dev/vllm.config.yaml:/vllm-workspace/vllm.config.yaml:ro
+      - ${VLLM_MODEL_DIR_HOST:-../../dev/models/llm/}:${VLLM_MODEL_MOUNT_PATH:-/models/llm/}:ro
+      - ${HF_CACHE_DIR_HOST:-../../dev/cache/hf}:/root/.cache/huggingface
+      - ${VLLM_CACHE_DIR_HOST:-../../dev/cache/vllm}:/root/.cache/vllm
+    command:
+      --config /vllm-workspace/vllm.config.yaml
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import urllib.request; urllib.request.urlopen(
+          'http://127.0.0.1:8000/health', timeout=5)"
+      interval: 30s
+      timeout: 8s
+      retries: 10
+      start_period: 360s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging: *default-logging
+    networks:
+      - voice
+
+  llm-proxy:
+    build:
+      context: ../../services/llm_proxy
+    restart: unless-stopped
+    depends_on:
+      vllm:
+        condition: service_healthy
+    ports:
+      - ${LLM_PROXY_PORT:-18001}:8001
+    environment:
+      TZ: ${TZ:-UTC}
+      VLLM_BASE_URL: http://vllm:8000/v1
+      LLM_PROXY_LOG_LEVEL: ${LLM_PROXY_LOG_LEVEL:-INFO}
+      LLM_PROXY_ENABLE_CAPTURE: ${LLM_PROXY_ENABLE_CAPTURE:-true}
+      LLM_PROXY_CAPTURE_DIR: /datasets/llm
+      LLM_PROXY_LOG_DIR: /logs
+      LLM_PROXY_MAX_REPAIR_RETRIES: ${LLM_PROXY_MAX_REPAIR_RETRIES:-1}
+      LLM_PROXY_UPSTREAM_TIMEOUT_SECONDS: ${LLM_PROXY_UPSTREAM_TIMEOUT_SECONDS:-600}
+    volumes:
+      - ../../dev/datasets/llm:/datasets/llm
+      - ../../dev/logs:/logs
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import urllib.request; urllib.request.urlopen(
+          'http://127.0.0.1:8001/health', timeout=5)"
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 10s
+    logging: *default-logging
+    networks:
+      - voice
+
+  wyoming-whisper:
+    build:
+      context: ../../services/stt_faster_whisper
+    image: ${STT_IMAGE:-ha-voice-agent/wyoming-faster-whisper:local}
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "10300:10300"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${STT_MODEL_DIR_HOST:-../../models/stt}:/models/stt:ro
+      - ${STT_DATASET_DIR_HOST:-../../dev/datasets/stt}:/datasets/stt
+    command:
+      - --uri
+      - tcp://0.0.0.0:10300
+      - --data-dir
+      - /models/stt
+      - --download-dir
+      - /models/stt
+      - --model
+      - ${STT_MODEL:-/models/stt/large-v3-ct2}
+      - --language
+      - ${STT_LANGUAGE:-en}
+      - --device
+      - ${STT_DEVICE:-cuda}
+      - --compute-type
+      - ${STT_COMPUTE_TYPE:-float16}
+      - --local-files-only
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import socket; sock = socket.create_connection(
+          ('127.0.0.1', 10300), timeout=5); sock.close()"
+      interval: 20s
+      timeout: 8s
+      retries: 6
+      start_period: 30s
+    logging: *default-logging
+    networks:
+      - voice
+
+  wyoming-piper:
+    image: rhasspy/wyoming-piper@sha256:c874e4a04657ae3381332ee5d0c8c70a310dae6722892840f530ac0890b44eb3
+    restart: unless-stopped
+    ports:
+      - "10200:10200"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${TTS_MODEL_DIR_HOST:-../../dev/models/tts}:/data
+    command:
+      - --uri
+      - tcp://0.0.0.0:10200
+      - --data-dir
+      - /data
+      - --voice
+      - ${TTS_VOICE:-en_US-lessac-medium}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -c "</dev/tcp/127.0.0.1/10200"
+      interval: 20s
+      timeout: 8s
+      retries: 6
+      start_period: 30s
+    logging: *default-logging
+    networks:
+      - voice
+
+networks:
+  voice:
+    name: ha-voice-agent-dev
