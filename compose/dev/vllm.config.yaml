@@ -11,7 +11,7 @@ disable-log-requests: true
 
 dtype: half
 kv-cache-dtype: auto
-max-model-len: 16384
+max-model-len: 8192
 
 max-num-batched-tokens: 2048
 max-num-seqs: 1
