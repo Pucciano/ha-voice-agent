@@ -6,7 +6,7 @@ This project uses third-party software and model artifacts.
 
 | Component | Image | Digest / Tag | License |
 |---|---|---|---|
-| vLLM server | `vllm/vllm-openai` | `v0.15.1@sha256:8c9aaddfa6011b9651d06834d2fb90bdb9ab6ced4b420ec76925024eb12b22d0` | Apache-2.0 |
+| vLLM server | `vllm/vllm-openai` | `v0.19.0` | Apache-2.0 |
 | Wyoming Faster-Whisper (local build) | `ha-voice-agent/wyoming-faster-whisper:local` | Built from `python:3.12-slim-bookworm` | See upstream dependencies |
 | Wyoming Piper | `rhasspy/wyoming-piper` | `sha256:c874e4a04657ae3381332ee5d0c8c70a310dae6722892840f530ac0890b44eb3` | MIT (project-level) |
 | Debug network tools | `nicolaka/netshoot` | `latest` | See upstream repository |

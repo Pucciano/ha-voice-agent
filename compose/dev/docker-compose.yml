@@ -8,9 +8,8 @@ x-default-logging: &default-logging
 
 services:
   vllm:
-    image: vllm/vllm-openai:v0.15.1@sha256:8c9aaddfa6011b9651d06834d2fb90bdb9ab6ced4b420ec76925024eb12b22d0
+    image: vllm/vllm-openai:v0.19.0
     restart: unless-stopped
-    gpus: all
     ipc: host
     ports:
       - "10100:8000"
@@ -88,7 +87,6 @@ services:
       context: ../../services/stt_faster_whisper
     image: ${STT_IMAGE:-ha-voice-agent/wyoming-faster-whisper:local}
     restart: unless-stopped
-    gpus: all
     ports:
       - "10300:10300"
     environment:
@@ -122,6 +120,13 @@ services:
       timeout: 8s
       retries: 6
       start_period: 30s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     logging: *default-logging
     networks:
       - voice
