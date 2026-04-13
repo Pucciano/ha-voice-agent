@@ -10,7 +10,6 @@ services:
       - ../../dev/logs:/logs
 
   wyoming-whisper:
-    gpus: all
     command:
       - --uri
       - tcp://0.0.0.0:10300
