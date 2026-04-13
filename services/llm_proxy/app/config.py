@@ -53,7 +53,7 @@ def load_settings() -> Settings:
         vllm_base_url=os.getenv("VLLM_BASE_URL", "http://vllm:8000/v1"),
         served_model_name=os.getenv(
             "VLLM_SERVED_MODEL_NAME",
-            "qwen2.5-7b-instruct",
+            "aivi-8b-instruct",
         ),
         log_level=os.getenv("LLM_PROXY_LOG_LEVEL", "INFO").upper(),
         capture_enabled=_to_bool(
