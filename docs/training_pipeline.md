@@ -2,6 +2,14 @@
 
 This document describes dataset capture, preparation, and evaluation workflows.
 
+Note that all training runs on dedicated A100 hardware, not on the inference
+server. The inference GPU (RTX 3090 Ti, 24 GB VRAM) does not have headroom for
+training alongside the runtime stack. Data is captured on the inference server
+during normal operation, transferred to the training machine, and the resulting
+adapters are deployed back. The full infrastructure setup including hardware
+details, environment configuration, and the data transfer workflow is described
+in `docs/training_infrastructure.md`.
+
 ## 1) Dataset layout
 
 ```text
