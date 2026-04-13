@@ -1,15 +1,20 @@
 # Home Assistant integration guide
 
-This guide wires Home Assistant to the local `ha-voice-agent` stack.
+This guide wires Home Assistant to the local `ha-voice-agent` stack, including
+the inference services, voice satellites, and audio output.
 
 ## 1) Prerequisites
 
-- Docker + Compose working on the host.
-- NVIDIA Container Toolkit installed for GPU usage.
-- `ha-voice-agent` services running:
-  - STT (Wyoming Faster-Whisper) on `10300`
-  - TTS (Wyoming Piper) on `10200`
-  - LLM endpoint on `10100` (vLLM) or `18001` (llm_proxy)
+Before configuring Home Assistant, the following must be in place:
+
+- Docker and the Compose plugin running on the inference server.
+- The NVIDIA Container Toolkit installed for GPU passthrough.
+- The ha-voice-agent services running and healthy:
+  - STT (Wyoming Faster-Whisper) on port 10300
+  - TTS (Wyoming Piper) on port 10200
+  - LLM endpoint on port 10100 (vLLM direct) or 18001 (llm_proxy in dev)
+- Voice satellites flashed and connected to the network (see `docs/satellite_setup.md`).
+- Bluesound Pulse Flex speakers powered on and discoverable (see `docs/audio_output.md`).
 
 ## 2) Start stack
 
@@ -76,7 +81,22 @@ For dev capture mode, verify JSONL files appear in:
 - `dev/datasets/llm/`
 - `dev/datasets/stt/` (when using ingest workflow)
 
-## 8) Troubleshooting
+## 8) Voice satellite integration
+
+Once the ESP32S3 satellites are flashed with the ESPHome firmware and connected
+to the network, they should appear automatically in Home Assistant through the
+ESPHome integration. Each satellite registers as a device with voice assistant
+capabilities. Assign each satellite to the voice pipeline that uses the local
+STT and TTS integrations configured above, and set the audio output to the
+Bluesound media_player entity in the same room. This way, the wake word
+detected on the satellite triggers the full pipeline, and the spoken response
+plays back on the Pulse Flex rather than through the satellite hardware.
+
+For detailed satellite hardware setup and firmware configuration, refer to
+`docs/satellite_setup.md`. For Bluesound speaker configuration and TTS audio
+routing, see `docs/audio_output.md`.
+
+## 9) Troubleshooting
 
 - If STT/TTS integrations do not connect, verify host firewall rules.
 - If LLM tool calls are malformed, route HA to `llm_proxy` on `18001`.

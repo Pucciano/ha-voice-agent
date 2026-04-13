@@ -230,3 +230,8 @@ This table will be kept accurate as configs solidify.
 - 2026-04-12: consolidated all branches into dev, unified model to Qwen3-8B,
   corrected VRAM budget for 24 GB RTX 3090 Ti (max_model_len 8192,
   gpu_memory_utilization 0.88), fixed hardcoded paths in download scripts.
+- 2026-04-13: updated vLLM from v0.15.1 to v0.19.0, standardized GPU
+  reservations across all compose services. Rewrote README with full pipeline
+  description including satellite and audio output hardware. Added docs for
+  hardware stack, satellite setup, audio output, and training infrastructure.
+  Updated HA setup guide with satellite and Bluesound integration sections.
