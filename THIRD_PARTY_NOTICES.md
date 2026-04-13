@@ -44,7 +44,7 @@ This project uses third-party software and model artifacts.
 
 Default runtime model targets:
 
-- LLM: `Qwen/Qwen2.5-7B-Instruct`
+- LLM: `Qwen/Qwen3-8B`
 - STT: `Systran/faster-whisper-large-v3` (mounted at `models/stt/large-v3-ct2`)
 - TTS voice: `en_US-lessac-medium`
 

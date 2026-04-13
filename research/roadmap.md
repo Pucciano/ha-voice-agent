@@ -50,7 +50,7 @@ This table will be kept accurate as configs solidify.
 
 | Component | Mode | Target VRAM | Notes |
 |---|---:|---:|---|
-| vLLM (Qwen2.5-7B-Instruct) | prod/dev | 14–18 GB | FP16/BF16; tuned `gpu_memory_utilization`; `max_model_len` 4096–8192 |
+| vLLM (Qwen3-8B) | prod/dev | 14–18 GB | FP16/BF16; tuned `gpu_memory_utilization`; `max_model_len` 8192 |
 | KV cache | prod/dev | 2–5 GB | depends on context length + concurrency |
 | Faster-Whisper STT | dev/prod | 0–3 GB | local CT2 model, GPU default |
 | TTS (Piper) | prod/dev | ~0 GB | CPU by default |
@@ -103,7 +103,7 @@ This table will be kept accurate as configs solidify.
 - **Goal:** minimal overhead, minimal logs, pinned images, restart policies,
   health checks.
 - **Services:**
-  - vLLM OpenAI-compatible endpoint (default model: Qwen/Qwen2.5-7B-Instruct)
+  - vLLM OpenAI-compatible endpoint (default model: Qwen/Qwen3-8B)
   - Wyoming STT: local `wyoming-faster-whisper` image (GPU default)
   - Wyoming TTS: `rhasspy/wyoming-piper`
 - **Deliverables:** `compose/prod/docker-compose.yml`.
@@ -227,3 +227,6 @@ This table will be kept accurate as configs solidify.
 - 2026-02-16: completed dev runtime validation (all services healthy,
   direct/proxied chat completions HTTP 200, `healthcheck_stack.sh` and
   `smoke_test_llm_proxy.sh` passed).
+- 2026-04-12: consolidated all branches into dev, unified model to Qwen3-8B,
+  corrected VRAM budget for 24 GB RTX 3090 Ti (max_model_len 8192,
+  gpu_memory_utilization 0.88), fixed hardcoded paths in download scripts.

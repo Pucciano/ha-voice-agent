@@ -49,7 +49,7 @@ In Home Assistant's LLM/OpenAI-compatible integration:
 
 - Base URL: one of the above
 - API key: can be any non-empty placeholder if HA requires one
-- Model: `qwen2.5-7b-instruct` (or your configured served model name)
+- Model: `aivi-8b-instruct` (or your configured served model name)
 
 ## 6) Suggested system prompt
 

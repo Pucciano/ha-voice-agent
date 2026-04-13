@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 VOICE="${1:-en_US-lessac-medium}"
-TARGET_ROOT="${2:-/home/forensicshark/Documents/ha-voice-agent/dev/models/tts}"
+TARGET_ROOT="${2:-${REPO_ROOT}/dev/models/tts}"
 
 mkdir -p "${TARGET_ROOT}"
 
