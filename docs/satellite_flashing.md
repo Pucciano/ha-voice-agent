@@ -4,10 +4,9 @@ This runbook brings up one AIVI satellite board: a Seeed XIAO ESP32-S3 Plus
 soldered onto a reSpeaker XVF3800. Repeat it for every room. The steps were
 verified on the living-room board (`aivi-sat-living-room`).
 
-The board currently runs the bring-up firmware from `esphome/`. It has no wake
-word and no voice pipeline yet. It checks the hardware: I2C, XMOS firmware,
-microphone levels, direction of arrival and the LED ring. The flashing steps
-stay the same when the voice packages replace the bring-up package.
+The board runs the phase 3 firmware from `esphome/`: the wake word "Okay Nabu"
+on the device, with LED feedback and no voice pipeline yet. The flashing steps
+stay the same when later phases add packages.
 
 ## Prerequisites
 
@@ -88,13 +87,27 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   happens when the ESP32 reaches the XVF3800 over I2C.
 - The log shows `Found device at address 0x18` (audio codec) and `0x2C`
   (XVF3800), and `XMOS firmware version: 1.0.7`.
-- Wi-Fi connects and the log shows the IP address.
+- Wi-Fi connects and the log shows the IP address. The ring blinks orange until
+  Home Assistant has connected, then it goes dark.
 - `Pegel Kanal 0` and `Pegel Kanal 1` change with sound. Quiet rooms read around
-  -75 dBFS and speech between -40 and -15 dBFS. `Sprachrichtung` follows the
-  speaker, and the LED ring shows the direction as one blue LED.
+  -75 dBFS and speech between -40 and -15 dBFS.
+- Say "Okay Nabu". The ring pulses white-blue twice and then points at you for
+  three seconds. `Wake-Word-Erkennungen` counts up, and Home Assistant receives
+  the event `esphome.aivi_wake_word` with the `satellite_id`.
+- Switch on `Mikrofon stumm`. The ring turns red and "Okay Nabu" does nothing.
 
 ESPHome 2026.9 logs sensor states at VERBOSE level only, so the levels do not
 appear in the default log. Read them in Home Assistant or with any API client.
+
+### LED ring states
+
+| Ring | Meaning |
+|---|---|
+| Red, green, blue chase | Boot, or `LED-Ring-Test` pressed |
+| Blinking orange | Wi-Fi or Home Assistant not connected |
+| Steady red | Microphone muted |
+| Two white-blue pulses, then one blue LED | Wake word detected; the LED points at the speaker |
+| Off | Ready, listening for the wake word |
 
 ### 6. Later updates
 
