@@ -96,6 +96,12 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   the event `esphome.aivi_wake_word` with the `satellite_id`.
 - Switch on `Mikrofon stumm`. The ring turns red and "Okay Nabu" does nothing.
 
+Each detection logs `Detected 'Okay Nabu' with sliding average probability is
+… and max probability is …`. The average is taken at the moment it crosses the
+threshold, so it always sits just above the cutoff (0.85) and says nothing
+about confidence. Judge detections by the max probability instead. On the
+living-room board it averaged 0.98 in a quiet room and 0.94 with music.
+
 ESPHome 2026.9 logs sensor states at VERBOSE level only, so the levels do not
 appear in the default log. Read them in Home Assistant or with any API client.
 
