@@ -7,6 +7,11 @@
 #
 # Requires the substitution satellite_id (English room id, e.g. living_room).
 
+substitutions:
+  # I2S channel of the XVF3800 that the wake word listens to. The two channels
+  # carry differently processed signals; 1 follows the formatBCE reference.
+  wake_word_channel: "1"
+
 esp32:
   framework:
     sdkconfig_options:
@@ -40,8 +45,7 @@ micro_wake_word:
   id: mww
   microphone:
     microphone: i2s_mics
-    # Same channel as the formatBCE reference; channel 0 feeds the pipeline.
-    channels: 1
+    channels: ${wake_word_channel}
   # Keep listening after a detection; there is no pipeline yet to restart it.
   stop_after_detection: false
   models:
