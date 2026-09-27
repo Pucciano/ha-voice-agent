@@ -1,0 +1,48 @@
+# AIVI satellite: reSpeaker XVF3800 hardware package
+#
+# The pins are fixed by the board (XIAO pads D4 to D9). The XVF3800 is the I2S
+# master and drives BCLK and LRCLK. ESPHome cannot generate the 12.288 MHz
+# MCLK, so GPIO9 (D10) stays unconfigured. GPIO44 (D7, ESP32 to XVF3800) is
+# unused because the satellite has no local audio output.
+
+logger:
+  logs:
+    # The driver logs every direction-of-arrival poll at DEBUG.
+    respeaker_xvf3800: INFO
+
+i2c:
+  - id: internal_i2c
+    sda: GPIO5  # D4
+    scl: GPIO6  # D5
+    frequency: 400kHz
+    scan: true
+
+i2s_audio:
+  - id: i2s_input
+    i2s_lrclk_pin: GPIO7  # D8
+    i2s_bclk_pin: GPIO8  # D9
+
+microphone:
+  - platform: i2s_audio
+    id: i2s_mics
+    i2s_audio_id: i2s_input
+    i2s_din_pin: GPIO43  # D6, XVF3800 I2S_DATA1
+    i2s_mode: secondary
+    adc_type: external
+    pdm: false
+    # The XVF3800 sends 48 kHz stereo; the patched driver hands out 16 kHz.
+    sample_rate: 48000
+    bits_per_sample: 32bit
+    channel: stereo
+
+respeaker_xvf3800:
+  id: respeaker
+  address: 0x2C
+  mute_switch:
+    id: mic_mute_switch
+    name: Mikrofon stumm
+  dfu_version:
+    name: XVF3800 Firmware
+    update_interval: 120s
+  # No firmware block on purpose. With one, the component flashes the XMOS
+  # over I2C at boot as soon as the versions differ.

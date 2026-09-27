@@ -1,0 +1,23 @@
+# AIVI satellite: living room reference device (plan phase 0)
+#
+# Currently runs the bring-up firmware: no wake word and no voice pipeline.
+# Build and flash with `make sat-flash SAT=living-room`.
+
+substitutions:
+  name: aivi-sat-living-room
+  friendly_name: AIVI Satellit Wohnzimmer
+
+packages:
+  base: !include packages/aivi-base.yaml
+  xvf3800: !include packages/aivi-xvf3800.yaml
+  bringup: !include packages/aivi-bringup.yaml
+
+# Credentials stay in this file: every satellite has its own API key, which
+# also encrypts OTA uploads, and a substitution cannot select a secret.
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret living_room_api_key

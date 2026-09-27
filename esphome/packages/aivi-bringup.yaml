@@ -1,0 +1,90 @@
+# AIVI satellite: bring-up diagnostics (plan phases 1 and 2)
+#
+# Checks the hardware without a voice pipeline:
+# - I2C scan and XMOS firmware version in the boot log
+# - microphone level for each I2S channel
+# - direction of arrival, shown live on the LED ring
+# - LED ring test (red, green and blue chase) at boot and on demand
+#
+# Replace this package with the voice packages once every check passes.
+
+api:
+  # Home Assistant is not set up yet; do not reboot while no client connects.
+  reboot_timeout: 0s
+
+esphome:
+  on_boot:
+    - priority: -100
+      then:
+        - script.execute: led_ring_test
+
+respeaker_xvf3800:
+  led_beam_sensor:
+    id: beam_direction
+    name: Sprachrichtung
+    update_interval: 200ms
+    on_value:
+      - lambda: |-
+          if (id(led_ring_test).is_running()) return;
+          uint32_t colors[12] = {0};
+          colors[static_cast<int>(x) % 12] = 0x002040;
+          id(respeaker).set_led_ring(colors);
+
+sensor:
+  - platform: sound_level
+    passive: false
+    measurement_duration: 2s
+    microphone:
+      microphone: i2s_mics
+      channels: 0
+    rms:
+      name: Pegel Kanal 0
+    peak:
+      name: Spitzenpegel Kanal 0
+  - platform: sound_level
+    passive: false
+    measurement_duration: 2s
+    microphone:
+      microphone: i2s_mics
+      channels: 1
+    rms:
+      name: Pegel Kanal 1
+    peak:
+      name: Spitzenpegel Kanal 1
+  - platform: wifi_signal
+    name: WLAN-Signal
+    update_interval: 60s
+
+script:
+  - id: led_ring_test
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(respeaker).is_failed();
+          then:
+            - logger.log:
+                level: WARN
+                format: "LED ring test skipped: XVF3800 not reachable"
+            - script.stop: led_ring_test
+      # One lap each in red, green and blue: every LED, every colour channel.
+      - repeat:
+          count: 36
+          then:
+            - lambda: |-
+                static const uint32_t kChannel[3] = {0x400000, 0x004000, 0x000040};
+                uint32_t colors[12] = {0};
+                colors[iteration % 12] = kChannel[iteration / 12];
+                id(respeaker).set_led_ring(colors);
+            - delay: 80ms
+      - lambda: |-
+          uint32_t colors[12] = {0};
+          id(respeaker).set_led_ring(colors);
+
+button:
+  - platform: template
+    name: LED-Ring-Test
+    on_press:
+      - script.execute: led_ring_test
+  - platform: restart
+    name: Neustart
