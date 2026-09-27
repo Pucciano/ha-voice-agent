@@ -37,7 +37,11 @@ logger:
   hardware_uart: USB_SERIAL_JTAG
 
 wifi:
+  id: wifi_id
   power_save_mode: none
+
+api:
+  id: api_id
 
 ota:
   - platform: esphome

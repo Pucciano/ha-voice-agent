@@ -1,0 +1,40 @@
+# AIVI satellite: diagnostics package
+#
+# Microphone level per I2S channel, Wi-Fi signal and a restart button. The
+# levels show whether audio arrives and how loud the room is while the wake
+# word is tested. Channel 1 feeds the wake word, channel 0 the pipeline.
+
+sensor:
+  - platform: sound_level
+    passive: false
+    measurement_duration: 2s
+    microphone:
+      microphone: i2s_mics
+      channels: 0
+    rms:
+      name: Pegel Kanal 0
+      entity_category: diagnostic
+    peak:
+      name: Spitzenpegel Kanal 0
+      entity_category: diagnostic
+  - platform: sound_level
+    passive: false
+    measurement_duration: 2s
+    microphone:
+      microphone: i2s_mics
+      channels: 1
+    rms:
+      name: Pegel Kanal 1
+      entity_category: diagnostic
+    peak:
+      name: Spitzenpegel Kanal 1
+      entity_category: diagnostic
+  - platform: wifi_signal
+    name: WLAN-Signal
+    entity_category: diagnostic
+    update_interval: 60s
+
+button:
+  - platform: restart
+    name: Neustart
+    entity_category: diagnostic

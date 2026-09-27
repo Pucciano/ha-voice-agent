@@ -1,0 +1,104 @@
+# AIVI satellite: voice input package (plan phase 3)
+#
+# On-device wake word with microWakeWord. Phase 3 only detects the wake word:
+# every detection is counted, reported to Home Assistant as the event
+# esphome.aivi_wake_word and shown on the LED ring. The voice pipeline
+# (voice_assistant) follows in phase 5.
+#
+# Requires the substitution satellite_id (English room id, e.g. living_room).
+
+esp32:
+  framework:
+    sdkconfig_options:
+      # Larger caches, and code plus read-only data in PSRAM, speed up the
+      # wake word inference considerably (same as the formatBCE reference).
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+
+globals:
+  - id: wake_word_detections
+    type: uint32_t
+    initial_value: "0"
+  # millis() of the last accepted detection; 0 means none since boot.
+  - id: last_wake_ms
+    type: uint32_t
+    initial_value: "0"
+
+esphome:
+  on_boot:
+    - priority: -100
+      then:
+        - sensor.template.publish:
+            id: wake_word_count
+            state: 0
+        - micro_wake_word.start:
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: i2s_mics
+    # Same channel as the formatBCE reference; channel 0 feeds the pipeline.
+    channels: 1
+  # Keep listening after a detection; there is no pipeline yet to restart it.
+  stop_after_detection: false
+  models:
+    # Pinned release; the sensitivity cutoffs below are tuned for it.
+    - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/okay_nabu_20241226.3/okay_nabu.json
+      id: okay_nabu
+  vad:
+    probability_cutoff: 0.05
+  on_wake_word_detected:
+    # A muted XVF3800 should not get this far; ignore it if it does.
+    - if:
+        condition:
+          switch.is_off: mic_mute_switch
+        then:
+          - lambda: |-
+              id(last_wake_ms) = millis();
+              id(wake_word_detections) += 1;
+              id(wake_word_count).publish_state(id(wake_word_detections));
+          - homeassistant.event:
+              event: esphome.aivi_wake_word
+              data:
+                satellite_id: ${satellite_id}
+                wake_word: !lambda return wake_word;
+
+sensor:
+  # Detections since boot. The history in Home Assistant is the phase 3 test
+  # log: hits, misses and false positives.
+  - platform: template
+    id: wake_word_count
+    name: Wake-Word-Erkennungen
+    icon: mdi:account-voice
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: never
+
+select:
+  - platform: template
+    id: wake_word_sensitivity
+    name: Wake-Word-Empfindlichkeit
+    icon: mdi:tune-variant
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - Wenig empfindlich
+      - Mittel empfindlich
+      - Sehr empfindlich
+    initial_option: Wenig empfindlich
+    on_value:
+      # Cutoffs for okay_nabu 20241226.3 as uint8 (probability * 255), with
+      # false accepts per hour on the Dinner Party Corpus: 0.85 -> 0.000,
+      # 0.69 -> 0.376, 0.56 -> 0.751 (values from the formatBCE reference).
+      - lambda: |-
+          if (x == "Wenig empfindlich") {
+            id(okay_nabu).set_probability_cutoff(217);
+          } else if (x == "Mittel empfindlich") {
+            id(okay_nabu).set_probability_cutoff(176);
+          } else {
+            id(okay_nabu).set_probability_cutoff(143);
+          }

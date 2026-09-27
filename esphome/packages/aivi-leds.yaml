@@ -1,0 +1,98 @@
+# AIVI satellite: LED ring status package
+#
+# The ring is the satellite's only feedback; the satellite itself stays
+# silent. A render loop picks the frame from the device state, highest
+# priority first:
+#   LED test    red, green and blue chase (at boot and on demand)
+#   muted       steady red
+#   wake word   two white-blue pulses, then the ring points at the speaker
+#   not ready   orange blink while Wi-Fi or Home Assistant is disconnected
+#   idle        off
+# The driver skips unchanged frames, so a steady ring costs no I2C traffic.
+#
+# Requires aivi-voice-input.yaml (last_wake_ms) and aivi-xvf3800.yaml.
+
+substitutions:
+  led_pulse_ms: "1200"
+  led_direction_ms: "3000"
+
+respeaker_xvf3800:
+  led_beam_sensor:
+    id: beam_direction
+    # Changes several times a second while people talk; keep it out of the
+    # Home Assistant recorder.
+    internal: true
+    update_interval: 200ms
+
+esphome:
+  on_boot:
+    - priority: -100
+      then:
+        - script.execute: led_ring_test
+
+interval:
+  - interval: 50ms
+    then:
+      - lambda: |-
+          if (id(respeaker).is_failed() || id(led_ring_test).is_running()) return;
+
+          constexpr int N = 12;
+          const uint32_t now = millis();
+          const uint32_t since_wake = now - id(last_wake_ms);
+          const bool woke = id(last_wake_ms) != 0;
+          uint32_t frame[N] = {0};
+          auto fill = [&](uint32_t c) { for (auto &led : frame) led = c; };
+          auto rgb = [](float r, float g, float b, float level) -> uint32_t {
+            return (uint32_t(r * level) << 16) | (uint32_t(g * level) << 8) | uint32_t(b * level);
+          };
+
+          if (id(mic_mute_switch).state) {
+            fill(rgb(96, 0, 0, 1.0f));
+          } else if (woke && since_wake < ${led_pulse_ms}) {
+            // Two pulses: the level goes 0 -> 1 -> 0 twice.
+            const float cycles = 2.0f * since_wake / ${led_pulse_ms};
+            const float level = 0.5f - 0.5f * cosf(cycles * 2.0f * M_PI);
+            fill(rgb(64, 128, 255, 0.5f * level));
+          } else if (woke && since_wake < ${led_pulse_ms} + ${led_direction_ms} &&
+                     id(beam_direction).has_state()) {
+            // The azimuth index and the LED numbering are rotated by five
+            // positions (150 degrees), as in formatBCE's LED package.
+            const int led = (static_cast<int>(id(beam_direction).state) + 5) % N;
+            frame[led] = rgb(0, 48, 96, 1.0f);
+            frame[(led + 1) % N] = rgb(0, 12, 24, 1.0f);
+            frame[(led + N - 1) % N] = rgb(0, 12, 24, 1.0f);
+          } else if (!id(wifi_id).is_connected() ||
+                     !id(api_id).is_connected_with_state_subscription()) {
+            if (now % 2000 < 300) fill(rgb(96, 40, 0, 1.0f));
+          }
+          id(respeaker).set_led_ring(frame);
+
+script:
+  - id: led_ring_test
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(respeaker).is_failed();
+          then:
+            - logger.log:
+                level: WARN
+                format: "LED ring test skipped: XVF3800 not reachable"
+            - script.stop: led_ring_test
+      # One lap each in red, green and blue: every LED, every colour channel.
+      - repeat:
+          count: 36
+          then:
+            - lambda: |-
+                static const uint32_t kChannel[3] = {0x400000, 0x004000, 0x000040};
+                uint32_t colors[12] = {0};
+                colors[iteration % 12] = kChannel[iteration / 12];
+                id(respeaker).set_led_ring(colors);
+            - delay: 80ms
+
+button:
+  - platform: template
+    name: LED-Ring-Test
+    entity_category: diagnostic
+    on_press:
+      - script.execute: led_ring_test
