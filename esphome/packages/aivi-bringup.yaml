@@ -26,8 +26,14 @@ respeaker_xvf3800:
     on_value:
       - lambda: |-
           if (id(led_ring_test).is_running()) return;
+          // The azimuth index and the LED numbering are rotated by five
+          // positions (150 degrees); formatBCE's LED package applies the same
+          // offset. Bright LED towards the speaker, dim neighbours.
+          const int led = (static_cast<int>(x) + 5) % 12;
           uint32_t colors[12] = {0};
-          colors[static_cast<int>(x) % 12] = 0x002040;
+          colors[led] = 0x003060;
+          colors[(led + 1) % 12] = 0x000818;
+          colors[(led + 11) % 12] = 0x000818;
           id(respeaker).set_led_ring(colors);
 
 sensor:
