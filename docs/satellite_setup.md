@@ -26,6 +26,9 @@ https://wiki.seeedstudio.com/respeaker_xvf3800_introduction/
 
 ## ESPHome firmware
 
+The device configurations live in `esphome/`. Flashing a board, including the
+one-time XVF3800 firmware switch, is described in `docs/satellite_flashing.md`.
+
 The ESP32S3 runs ESPHome with the voice_assistant component. The firmware
 configuration needs to include the I2S microphone input from the XVF3800, the
 microWakeWord component for on-device wake-word detection, and the Wyoming

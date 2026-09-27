@@ -226,6 +226,8 @@ Further setup and operational guides live in the `docs/` directory:
   the llm_proxy.
 - `docs/training_pipeline.md` details dataset schemas, the capture-to-training
   workflow, and evaluation metrics.
+- `docs/satellite_flashing.md` is the per-room runbook for flashing a
+  satellite board (XVF3800 firmware, ESP32, verification).
 
 ## Makefile helpers
 
@@ -236,6 +238,10 @@ make dev-down         # stop development stack
 make prod-up          # start production stack
 make prod-down        # stop production stack
 make test             # run compileall and basic checks
+make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU
+make sat-chip DEVICE=/dev/cu.usbmodemXXXX           # identify the ESP32
+make sat-flash SAT=living-room DEVICE=<port-or-ip>   # build and flash
+make sat-logs SAT=living-room DEVICE=<port-or-ip>    # follow the log
 ```
 
 ## Branch workflow
