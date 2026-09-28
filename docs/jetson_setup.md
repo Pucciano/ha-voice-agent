@@ -74,7 +74,8 @@ card is enough; use a high-endurance card.
 - removes the large desktop applications (about 845 MB)
 - boots to the console instead of the desktop
 - installs Docker Compose v2.29.7 and adds `aivi` to the `docker` group
-- creates `/srv/wyoming` and `/opt/aivi/compose`
+- creates `/srv/wyoming` and `/opt/aivi/compose`, and copies the compose file
+  and its `custom_sentences/` there
 - installs `aivi-logmode` and sets it to dev
 
 NVIDIA's list of desktop-only packages is not used on purpose: on this image it
@@ -89,7 +90,7 @@ ssh aivi@192.168.55.1 mkdir -p /tmp/aivi-provision
 ```
 
 ```bash
-scp scripts/jetson_provision.sh scripts/jetson_logmode.sh compose/jetson/docker-compose.yml aivi@192.168.55.1:/tmp/aivi-provision/
+scp -r scripts/jetson_provision.sh scripts/jetson_logmode.sh compose/jetson/docker-compose.yml compose/jetson/custom_sentences aivi@192.168.55.1:/tmp/aivi-provision/
 ```
 
 ```bash
@@ -130,7 +131,8 @@ ssh aivi@192.168.55.1 'cd /opt/aivi/compose && docker compose up -d'
 
 The first start pulls about 1.5 GB of images, downloads the German model
 (`de_DE-zamia`) and the Piper voice, and trains Speech-to-Phrase. It retrains
-on every start, so restart it after renaming entities or areas:
+on every start and not otherwise, so restart it after renaming entities,
+areas or floors (see [section 8](#8-names-and-sentences)):
 
 ```bash
 ssh aivi@192.168.55.1 'cd /opt/aivi/compose && docker compose restart speech-to-phrase'
@@ -163,9 +165,12 @@ Reference results from the living room setup:
 
 | Input | Result | Time |
 |---|---|---:|
-| "Wie spät ist es?" | `wie spät ist es` | 1.4 s |
-| "Schalte die Lichter im Wohnzimmer an." | `schalte die lichter in dem Wohnzimmer an` | 1.2 s |
-| "Stelle einen Timer auf fünf Minuten." | `stelle einen Timer auf 5 Minuten` | 1.3 s |
+| "Wie spät ist es?" | `wie spät ist es` | 1.3 s |
+| "Schalte das Licht im Wohnzimmer ein." | `schalte das licht im Wohnzimmer ein` | 1.3 s |
+| "Schalte die Lichter im Wohnzimmer an." | `schalte die lichter im Wohnzimmer an` | 0.8 s |
+| "Schalte alle Lichter in der Wohnung aus." | `schalte alle lichter in der Wohnung aus` | 1.2 s |
+| "Schalte die Stehlampe aus." | `schalte die Stehlampe aus` | 1.1 s |
+| "Stelle einen Timer auf fünf Minuten." | `stelle einen Timer auf 5 Minuten` | 0.8 s |
 | Piper's own answer sentence | empty, because it is not a command | 2.3 s |
 | Piper, 2.75 s answer | audio ready | 1.0 s |
 
@@ -175,6 +180,62 @@ The first Piper request after a start takes about 6 s while the voice loads.
 
 Add the **Wyoming Protocol** integration twice, with host `<jetson-ip>` and
 ports `10300` and `10200`. Give the Jetson a DHCP reservation.
+
+## 8. Names and sentences
+
+Speech-to-Phrase only recognises its sentence templates, filled with the names
+of the entities, areas and floors exposed to Assist. What worked in the living
+room setup:
+
+- **German display names.** Speech-to-Phrase always trains an entity's display
+  name and adds its aliases to it, so an alias does not remove an English or
+  technical name. Rename the device ("name by user") or the entity instead; the
+  entity ID stays. When Home Assistant offers to rename the entity IDs too,
+  decline.
+- **No entity named like an area or floor.** Every entity name also becomes
+  "schalte <name> ein". A window contact named "Wohnzimmer" turned "Schalte das
+  Licht im Wohnzimmer ein" into `schalte Wohnzimmer ein`, and Home Assistant
+  answered that it found several.
+- **Light groups instead of their bulbs.** Expose the group and not its
+  members, so an area command sends one command per lamp.
+- **Aliases spelled as spoken** for loanwords and foreign names, for example
+  `Haibord` for `Highboard`.
+- **Nothing exposed that must never switch by mistake**, such as the plug of
+  the server rack.
+
+`train/de_DE-zamia/missing_words_dictionary.txt` under
+`/srv/wyoming/speech-to-phrase` lists every word whose pronunciation was
+guessed. English words there point to names that still need a German one.
+
+### Custom sentences
+
+The built-in German sentences of speech-to-phrase 1.4.3 only know "schalte die
+Lichter in [dem] <area> ein". "Schalte das Licht im Wohnzimmer ein" is
+missing, and the rule `[schalte ][ das]licht[er]` produces the joined word
+`daslicht`, which Home Assistant does not understand.
+`compose/jetson/custom_sentences/de/lights.yaml` adds the everyday forms for
+areas and floors. It is mounted read-only and read at every training.
+
+To update the sentences on a running Jetson, copy them, install them with sudo
+and recreate the container:
+
+```bash
+ssh aivi@<jetson-ip> 'rm -rf /tmp/aivi-update && mkdir /tmp/aivi-update'
+```
+
+```bash
+scp -r compose/jetson/custom_sentences compose/jetson/docker-compose.yml aivi@<jetson-ip>:/tmp/aivi-update/
+```
+
+```bash
+ssh -t aivi@<jetson-ip> 'sudo sh -c "rm -rf /opt/aivi/compose/custom_sentences && cp -R /tmp/aivi-update/custom_sentences /opt/aivi/compose/ && chown -R root:root /opt/aivi/compose/custom_sentences && chmod -R u=rwX,go=rX /opt/aivi/compose/custom_sentences && install -m 0644 /tmp/aivi-update/docker-compose.yml /opt/aivi/compose/docker-compose.yml"'
+```
+
+```bash
+ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d --force-recreate speech-to-phrase'
+```
+
+Training takes about 11 s. Requests in that time return an empty text.
 
 ## Logging
 
@@ -194,7 +255,10 @@ ssh -t aivi@192.168.55.1 sudo aivi-logmode prod
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Many `Guessing pronunciation for …` warnings | English entity or area names in a German model | Add German aliases in Home Assistant, then restart speech-to-phrase |
+| Many `Guessing pronunciation for …` warnings | English entity or area names in a German model | Give the exposed entities German display names, then restart speech-to-phrase ([section 8](#8-names-and-sentences)) |
+| `schalte Wohnzimmer ein`, answer "Es wurden mehrere … gefunden" | An entity is named like an area | Rename the entity ([section 8](#8-names-and-sentences)) |
+| `daslicht` in the transcript | Built-in German rule of speech-to-phrase 1.4.3 | Install the custom sentences ([section 8](#8-names-and-sentences)) |
+| A renamed light keeps its old name in speech-to-phrase | The entity is unavailable, so its restored state still carries the old name | Set the entity name as well, not only the device name |
 | New containers fail with `Operation not permitted` on thread start | Docker 20.10.7 from the SD image blocks `clone3` | Provision; the update brings Docker 20.10.21 |
 | `curl: command not found` | The SD card image has no curl | Provision installs it |
 | No `/dev/cu.usbmodem…` after boot | Charge-only cable, or setup already done | Use a data cable; after setup use SSH instead |
