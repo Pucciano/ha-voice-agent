@@ -26,4 +26,4 @@ chat-template-content-format: string
 enable-auto-tool-choice: true
 tool-call-parser: hermes
 
-#tool-server: 192.168.30.10:8090
+#tool-server: <home-assistant-ip>:8090
