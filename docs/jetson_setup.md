@@ -251,6 +251,17 @@ rsyslog is off in both modes.
 ssh -t aivi@192.168.55.1 sudo aivi-logmode prod
 ```
 
+The switch restarts Docker and recreates the services, so Speech-to-Phrase
+trains again. To debug, switch to dev, reproduce the problem and switch back
+to prod.
+
+The journal from dev mode stays on the card after the switch to prod. Delete
+it; dev mode creates the directory again:
+
+```bash
+ssh -t aivi@192.168.55.1 sudo rm -rf /var/log/journal
+```
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -259,6 +270,7 @@ ssh -t aivi@192.168.55.1 sudo aivi-logmode prod
 | `schalte Wohnzimmer ein`, answer "Es wurden mehrere … gefunden" | An entity is named like an area | Rename the entity ([section 8](#8-names-and-sentences)) |
 | `daslicht` in the transcript | Built-in German rule of speech-to-phrase 1.4.3 | Install the custom sentences ([section 8](#8-names-and-sentences)) |
 | A renamed light keeps its old name in speech-to-phrase | The entity is unavailable, so its restored state still carries the old name | Set the entity name as well, not only the device name |
+| `docker logs` fails with `configured logging driver does not support reading` | prod log mode keeps no container logs | Switch to dev, reproduce, switch back ([Logging](#logging)) |
 | New containers fail with `Operation not permitted` on thread start | Docker 20.10.7 from the SD image blocks `clone3` | Provision; the update brings Docker 20.10.21 |
 | `curl: command not found` | The SD card image has no curl | Provision installs it |
 | No `/dev/cu.usbmodem…` after boot | Charge-only cable, or setup already done | Use a data cable; after setup use SSH instead |
