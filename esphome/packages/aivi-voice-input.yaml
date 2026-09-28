@@ -16,10 +16,11 @@
 # Requires the substitution satellite_id (English room id, e.g. living_room).
 
 substitutions:
-  # I2S channels of the XVF3800. The two carry differently processed signals;
-  # both choices follow the formatBCE reference.
+  # I2S channels of the XVF3800; the two carry differently processed signals.
+  # Channel 0 clips at 1-2 m (peaks at 0 dBFS broke speech recognition in
+  # the living room), channel 1 runs 5-9 dB lower, so both use channel 1.
   wake_word_channel: "1"
-  pipeline_channel: "0"
+  pipeline_channel: "1"
   # Voice phases, shared with aivi-leds.yaml.
   voice_phase_idle: "0"
   voice_phase_listening: "1"

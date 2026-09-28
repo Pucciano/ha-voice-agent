@@ -2,7 +2,7 @@
 #
 # Microphone level per I2S channel, Wi-Fi signal and a restart button. The
 # levels show whether audio arrives and how loud the room is while the wake
-# word is tested. The wake word uses the channel set by wake_word_channel.
+# word is tested. Wake word and pipeline use channel 1 (see aivi-voice-input).
 #
 # Levels are dBFS over two seconds of the processed XVF3800 output: 0 is
 # digital full scale (clipping), everything below is negative. "Pegel" is the
