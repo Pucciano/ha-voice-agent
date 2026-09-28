@@ -3,8 +3,8 @@ set -euo pipefail
 
 # One-time setup of a Jetson Nano, installed from the JetPack 4.6.x SD card
 # image, as a headless speech server for Home Assistant. Run it on the Jetson
-# as root, from a directory that also holds jetson_logmode.sh and
-# docker-compose.yml (compose/jetson):
+# as root, from a directory that also holds jetson_logmode.sh,
+# docker-compose.yml and custom_sentences/ (both from compose/jetson):
 #   sudo bash jetson_provision.sh
 # It is safe to run again. Reboot afterwards to finish the update.
 
@@ -36,6 +36,10 @@ for file in jetson_logmode.sh docker-compose.yml; do
     exit 1
   fi
 done
+if [[ ! -d "${HERE}/custom_sentences" ]]; then
+  echo "Missing ${HERE}/custom_sentences" >&2
+  exit 1
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 APT=(apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
@@ -92,6 +96,10 @@ install -d -m 0755 \
   /srv/wyoming/piper/data /srv/wyoming/whisper/data
 install -d -m 0750 -g docker /opt/aivi/compose
 install -m 0644 "${HERE}/docker-compose.yml" /opt/aivi/compose/docker-compose.yml
+rm -rf /opt/aivi/compose/custom_sentences
+cp -R "${HERE}/custom_sentences" /opt/aivi/compose/custom_sentences
+chown -R root:root /opt/aivi/compose/custom_sentences
+chmod -R u=rwX,go=rX /opt/aivi/compose/custom_sentences
 
 log "Log mode switch, dev mode while the system is tested"
 install -m 0755 "${HERE}/jetson_logmode.sh" /usr/local/sbin/aivi-logmode

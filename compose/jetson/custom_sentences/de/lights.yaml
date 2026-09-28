@@ -1,0 +1,16 @@
+---
+# Extra German light sentences for speech-to-phrase 1.4.3.
+#
+# The built-in German sentences only know "schalte die Lichter in [dem]
+# <area> ein". "das Licht im <area>" is missing, and the built-in rule
+# "[schalte ][ das]licht[er]" joins "das" and "licht" into "daslicht", which
+# Home Assistant does not understand. Home Assistant's own German intents
+# understand every sentence below, for areas and for floors.
+language: "de"
+intents:
+  AiviLights:
+    data:
+      - sentences:
+          - "(schalt|mach)[e] das licht (an|ein|aus)"
+          - "(schalt|mach)[e] das licht (im|in [der|dem]) ({area}|{floor}) (an|ein|aus)"
+          - "(schalt|mach)[e] [alle|die] (lichter|lampen) (im|in [der|dem]) ({area}|{floor}) (an|ein|aus)"

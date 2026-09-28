@@ -14,6 +14,9 @@ name: aivi-jetson
 #
 # The .env file next to this one (root:docker, 0640, never committed) sets
 # HASS_WEBSOCKET_URI and HASS_TOKEN; see docs/jetson_setup.md.
+#
+# custom_sentences/ holds extra speech-to-phrase sentences, one directory per
+# language. They are read when the model is trained, i.e. on every start.
 
 services:
   speech-to-phrase:
@@ -26,11 +29,14 @@ services:
     volumes:
       - /srv/wyoming/speech-to-phrase/models:/models
       - /srv/wyoming/speech-to-phrase/train:/train
+      - ./custom_sentences:/custom_sentences:ro
     command:
       - --hass-websocket-uri
       - ${HASS_WEBSOCKET_URI:?HASS_WEBSOCKET_URI missing in .env}
       - --hass-token
       - ${HASS_TOKEN:?HASS_TOKEN missing in .env}
+      - --custom-sentences-dir
+      - /custom_sentences
       - --retrain-on-start
 
   piper:
