@@ -1,7 +1,8 @@
 # AIVI satellite: living room reference device (plan phase 0)
 #
-# Phase 3 firmware: on-device wake word with LED feedback, no voice pipeline
-# yet. Build and flash with `make sat-flash SAT=living-room`.
+# Phase 5 firmware: on-device wake word starts the Home Assistant voice
+# pipeline; the answer plays on the room speaker. Build and flash with
+# `make sat-flash SAT=living-room`.
 
 substitutions:
   name: aivi-sat-living-room

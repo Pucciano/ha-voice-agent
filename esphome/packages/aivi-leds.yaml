@@ -5,16 +5,22 @@
 # priority first:
 #   LED test    red, green and blue chase (at boot and on demand)
 #   muted       steady red
-#   wake word   two white-blue pulses, then the ring points at the speaker
+#   error       three short red flashes, e.g. when nothing was recognised
+#   wake word   two white-blue pulses
+#   listening   one blue LED points at the speaker
+#   thinking    a white-blue comet circles until the pipeline ends
 #   not ready   orange blink while Wi-Fi or Home Assistant is disconnected
 #   idle        off
 # The driver skips unchanged frames, so a steady ring costs no I2C traffic.
 #
-# Requires aivi-voice-input.yaml (last_wake_ms) and aivi-xvf3800.yaml.
+# Requires aivi-voice-input.yaml (voice phase globals) and aivi-xvf3800.yaml.
 
 substitutions:
   led_pulse_ms: "1200"
-  led_direction_ms: "3000"
+  led_error_ms: "1500"
+  # Drop a listening or thinking phase that never ends, e.g. when Home
+  # Assistant stops answering.
+  led_phase_timeout_ms: "30000"
 
 respeaker_xvf3800:
   led_beam_sensor:
@@ -38,8 +44,10 @@ interval:
 
           constexpr int N = 12;
           const uint32_t now = millis();
-          const uint32_t since_wake = now - id(last_wake_ms);
-          const bool woke = id(last_wake_ms) != 0;
+          const int phase = id(voice_phase);
+          const uint32_t in_phase = now - id(voice_phase_ms);
+          const bool active = in_phase < ${led_phase_timeout_ms};
+          const bool pulsing = id(last_wake_ms) != 0 && now - id(last_wake_ms) < ${led_pulse_ms};
           uint32_t frame[N] = {0};
           auto fill = [&](uint32_t c) { for (auto &led : frame) led = c; };
           auto rgb = [](float r, float g, float b, float level) -> uint32_t {
@@ -48,19 +56,32 @@ interval:
 
           if (id(mic_mute_switch).state) {
             fill(rgb(96, 0, 0, 1.0f));
-          } else if (woke && since_wake < ${led_pulse_ms}) {
+          } else if (phase == ${voice_phase_error} && in_phase < ${led_error_ms}) {
+            if ((in_phase / 250) % 2 == 0) fill(rgb(128, 0, 0, 1.0f));
+          } else if (pulsing) {
             // Two pulses: the level goes 0 -> 1 -> 0 twice.
-            const float cycles = 2.0f * since_wake / ${led_pulse_ms};
+            const float cycles = 2.0f * (now - id(last_wake_ms)) / ${led_pulse_ms};
             const float level = 0.5f - 0.5f * cosf(cycles * 2.0f * M_PI);
             fill(rgb(64, 128, 255, 0.5f * level));
-          } else if (woke && since_wake < ${led_pulse_ms} + ${led_direction_ms} &&
-                     id(beam_direction).has_state()) {
-            // The azimuth index and the LED numbering are rotated by five
-            // positions (150 degrees), as in formatBCE's LED package.
-            const int led = (static_cast<int>(id(beam_direction).state) + 5) % N;
-            frame[led] = rgb(0, 48, 96, 1.0f);
-            frame[(led + 1) % N] = rgb(0, 12, 24, 1.0f);
-            frame[(led + N - 1) % N] = rgb(0, 12, 24, 1.0f);
+          } else if (phase == ${voice_phase_listening} && active) {
+            if (id(beam_direction).has_state()) {
+              // The azimuth index and the LED numbering are rotated by five
+              // positions (150 degrees), as in formatBCE's LED package.
+              const int led = (static_cast<int>(id(beam_direction).state) + 5) % N;
+              frame[led] = rgb(0, 48, 96, 1.0f);
+              frame[(led + 1) % N] = rgb(0, 12, 24, 1.0f);
+              frame[(led + N - 1) % N] = rgb(0, 12, 24, 1.0f);
+            } else {
+              fill(rgb(0, 12, 24, 1.0f));
+            }
+          } else if (phase == ${voice_phase_thinking} && active) {
+            // Comet: a bright head with a fading tail, one lap per second.
+            const float head = (now % 1000) * N / 1000.0f;
+            for (int i = 0; i < N; i++) {
+              float behind = head - i;
+              if (behind < 0) behind += N;
+              if (behind < 4.0f) frame[i] = rgb(64, 128, 255, 0.5f * (1.0f - behind / 4.0f));
+            }
           } else if (!id(wifi_id).is_connected() ||
                      !id(api_id).is_connected_with_state_subscription()) {
             if (now % 2000 < 300) fill(rgb(96, 40, 0, 1.0f));
