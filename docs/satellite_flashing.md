@@ -4,9 +4,11 @@ This runbook brings up one AIVI satellite board: a Seeed XIAO ESP32-S3 Plus
 soldered onto a reSpeaker XVF3800. Repeat it for every room. The steps were
 verified on the living-room board (`aivi-sat-living-room`).
 
-The board runs the phase 3 firmware from `esphome/`: the wake word "Okay Nabu"
-on the device, with LED feedback and no voice pipeline yet. The flashing steps
-stay the same when later phases add packages.
+The board runs the phase 5 firmware from `esphome/`. "Okay Nabu" is detected on
+the device and starts the Home Assistant pipeline `AIVI Lokal Deutsch`. The
+satellite has no speaker: it reports the answer URL to Home Assistant, which
+plays it on the room's speaker. The flashing steps stay the same when later
+phases add packages.
 
 ## Prerequisites
 
@@ -91,9 +93,15 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   Home Assistant has connected, then it goes dark.
 - `Pegel Kanal 0` and `Pegel Kanal 1` change with sound. Quiet rooms read around
   -75 dBFS and speech between -40 and -15 dBFS.
-- Say "Okay Nabu". The ring pulses white-blue twice and then points at you for
-  three seconds. `Wake-Word-Erkennungen` counts up, and Home Assistant receives
-  the event `esphome.aivi_wake_word` with the `satellite_id`.
+- In Home Assistant, reload the satellite's ESPHome integration once after the
+  first flash with the voice assistant. Only then does it create the
+  `Assistent` (pipeline) and `Sprechpausen-Erkennung` selects. Set `Assistent`
+  to `AIVI Lokal Deutsch`.
+- Say "Okay Nabu", then "Wie spät ist es?". The ring pulses white-blue twice,
+  points at you while you speak, and shows a circling comet while Home
+  Assistant works. Home Assistant receives `esphome.aivi_wake_word`,
+  `esphome.aivi_stt_text` ("wie spät ist es") and `esphome.aivi_tts_uri` (an
+  absolute `http://…/api/tts_proxy/….mp3` URL), each with the `satellite_id`.
 - Switch on `Mikrofon stumm`. The ring turns red and "Okay Nabu" does nothing.
 
 Each detection logs `Detected 'Okay Nabu' with sliding average probability is
@@ -112,8 +120,15 @@ appear in the default log. Read them in Home Assistant or with any API client.
 | Red, green, blue chase | Boot, or `LED-Ring-Test` pressed |
 | Blinking orange | Wi-Fi or Home Assistant not connected |
 | Steady red | Microphone muted |
-| Two white-blue pulses, then one blue LED | Wake word detected; the LED points at the speaker |
+| Three short red flashes | Error, e.g. no command recognised |
+| Two white-blue pulses | Wake word detected |
+| One blue LED | Listening; the LED points at the speaker |
+| Circling white-blue comet | Home Assistant is working on the command |
 | Off | Ready, listening for the wake word |
+
+The satellite refuses follow-up questions (`continue_conversation`): every
+command needs the wake word. Without an echo reference it would otherwise hear
+its own answer from the room speaker.
 
 ### 6. Later updates
 
