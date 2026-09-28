@@ -130,7 +130,38 @@ The satellite refuses follow-up questions (`continue_conversation`): every
 command needs the wake word. Without an echo reference it would otherwise hear
 its own answer from the room speaker.
 
-### 6. Later updates
+### 6. Route answers to the room speaker
+
+The Home Assistant automation `config/homeassistant/aivi_tts_router.yaml`
+(`AIVI Antwort-Routing`) plays each answer on exactly one speaker. For a new
+room, add an entry under `rooms`:
+
+```yaml
+    kitchen:
+      device_id: <Home Assistant device id of aivi-sat-kitchen>
+      speaker: media_player.pulse_flex_kitchen_1
+      volume: 0.3
+```
+
+The device id is the last part of the satellite's device page URL in Home
+Assistant. Update the automation there with the file content (edit in YAML).
+
+The automation fails closed. It plays nothing for an unknown satellite, for an
+event from a different device, for a URL outside the Home Assistant TTS proxy,
+or while the speaker is grouped with other rooms. Only the path of the URL
+goes to the speaker; Home Assistant adds its own address, so the automation
+holds no IP address. The answer plays at the room's `volume`, and the previous
+volume comes back afterwards. It replaces running music, which does not resume
+(plan section 20, version 1).
+
+Test it:
+
+- "Okay Nabu", then "Wie spät ist es?": the answer comes from the room speaker.
+- Negative test: in Home Assistant, fire the event `esphome.aivi_tts_uri` with
+  `satellite_id: unknown` from the developer tools. Nothing plays, and the
+  automation trace ends at the first condition.
+
+### 7. Later updates
 
 Updates go over the network with encrypted OTA:
 
