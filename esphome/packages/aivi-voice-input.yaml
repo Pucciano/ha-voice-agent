@@ -1,0 +1,206 @@
+# AIVI satellite: voice input package (plan phase 5)
+#
+# microWakeWord detects the wake word on the device and starts the Home
+# Assistant voice pipeline; the audio goes to Home Assistant over the native
+# API. The satellite has no speaker: Home Assistant plays the answer on the
+# room's Bluesound, using the event esphome.aivi_tts_uri.
+#
+# One command per wake word. A follow-up (continue_conversation) is refused,
+# because without an echo reference the satellite would hear its own answer.
+#
+# Events to Home Assistant, each with the satellite_id:
+#   esphome.aivi_wake_word   wake word detected
+#   esphome.aivi_stt_text    recognised text
+#   esphome.aivi_tts_uri     URL of the spoken answer
+#
+# Requires the substitution satellite_id (English room id, e.g. living_room).
+
+substitutions:
+  # I2S channels of the XVF3800; the two carry differently processed signals.
+  # Channel 0 clips at 1-2 m (peaks at 0 dBFS broke speech recognition in
+  # the living room), channel 1 runs 5-9 dB lower, so both use channel 1.
+  wake_word_channel: "1"
+  pipeline_channel: "1"
+  # Voice phases, shared with aivi-leds.yaml.
+  voice_phase_idle: "0"
+  voice_phase_listening: "1"
+  voice_phase_thinking: "2"
+  voice_phase_error: "3"
+
+esp32:
+  framework:
+    sdkconfig_options:
+      # Larger caches, and code plus read-only data in PSRAM, speed up the
+      # wake word inference considerably (same as the formatBCE reference).
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+
+globals:
+  - id: wake_word_detections
+    type: uint32_t
+    initial_value: "0"
+  # millis() of the last accepted detection; 0 means none since boot.
+  - id: last_wake_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: voice_phase
+    type: int
+    initial_value: ${voice_phase_idle}
+  # millis() when voice_phase last changed.
+  - id: voice_phase_ms
+    type: uint32_t
+    initial_value: "0"
+  # Set by the wake word. A listening round without it is a follow-up.
+  - id: wake_pending
+    type: bool
+    initial_value: "false"
+
+esphome:
+  on_boot:
+    - priority: -100
+      then:
+        - sensor.template.publish:
+            id: wake_word_count
+            state: 0
+        - micro_wake_word.start:
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: i2s_mics
+    channels: ${wake_word_channel}
+  # Keep detecting while a pipeline runs; such detections are ignored below.
+  stop_after_detection: false
+  models:
+    # Pinned release; the sensitivity cutoffs below are tuned for it.
+    - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/okay_nabu_20241226.3/okay_nabu.json
+      id: okay_nabu
+  vad:
+    probability_cutoff: 0.05
+  on_wake_word_detected:
+    # A muted XVF3800 should not get this far; ignore it if it does.
+    - if:
+        condition:
+          and:
+            - switch.is_off: mic_mute_switch
+            - not:
+                voice_assistant.is_running:
+        then:
+          - lambda: |-
+              id(last_wake_ms) = millis();
+              id(wake_word_detections) += 1;
+              id(wake_word_count).publish_state(id(wake_word_detections));
+          - homeassistant.event:
+              event: esphome.aivi_wake_word
+              data:
+                satellite_id: ${satellite_id}
+                wake_word: !lambda return wake_word;
+          - if:
+              condition:
+                api.connected:
+              then:
+                - lambda: |-
+                    id(wake_pending) = true;
+                    id(voice_phase) = ${voice_phase_listening};
+                    id(voice_phase_ms) = millis();
+                - voice_assistant.start:
+                    wake_word: !lambda return wake_word;
+
+voice_assistant:
+  id: va
+  microphone:
+    microphone: i2s_mics
+    channels: ${pipeline_channel}
+  micro_wake_word: mww
+  use_wake_word: false
+  # The XVF3800 already suppresses noise and controls the gain.
+  noise_suppression_level: 0
+  auto_gain: 0dBFS
+  volume_multiplier: 1.0
+  on_listening:
+    - if:
+        condition:
+          lambda: return id(wake_pending);
+        then:
+          - lambda: id(wake_pending) = false;
+        else:
+          - logger.log: "Follow-up refused; the wake word starts every command"
+          - voice_assistant.stop:
+  on_stt_vad_end:
+    - lambda: |-
+        id(voice_phase) = ${voice_phase_thinking};
+        id(voice_phase_ms) = millis();
+  on_stt_end:
+    - homeassistant.event:
+        event: esphome.aivi_stt_text
+        data:
+          satellite_id: ${satellite_id}
+          text: !lambda return x;
+  on_tts_end:
+    - homeassistant.event:
+        event: esphome.aivi_tts_uri
+        data:
+          satellite_id: ${satellite_id}
+          uri: !lambda return x;
+  on_error:
+    # duplicate_wake_up_detected: another satellite already took the command.
+    - if:
+        condition:
+          lambda: return code != "duplicate_wake_up_detected";
+        then:
+          - lambda: |-
+              id(voice_phase) = ${voice_phase_error};
+              id(voice_phase_ms) = millis();
+  on_end:
+    - if:
+        condition:
+          lambda: return id(voice_phase) != ${voice_phase_error};
+        then:
+          - lambda: |-
+              id(voice_phase) = ${voice_phase_idle};
+              id(voice_phase_ms) = millis();
+  on_client_disconnected:
+    - voice_assistant.stop:
+    - lambda: |-
+        id(voice_phase) = ${voice_phase_idle};
+        id(voice_phase_ms) = millis();
+
+sensor:
+  # Detections since boot. The history in Home Assistant is the wake word test
+  # log: hits, misses and false positives.
+  - platform: template
+    id: wake_word_count
+    name: Wake-Word-Erkennungen
+    icon: mdi:account-voice
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: never
+
+select:
+  - platform: template
+    id: wake_word_sensitivity
+    name: Wake-Word-Empfindlichkeit
+    icon: mdi:tune-variant
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - Wenig empfindlich
+      - Mittel empfindlich
+      - Sehr empfindlich
+    initial_option: Wenig empfindlich
+    on_value:
+      # Cutoffs for okay_nabu 20241226.3 as uint8 (probability * 255), with
+      # false accepts per hour on the Dinner Party Corpus: 0.85 -> 0.000,
+      # 0.69 -> 0.376, 0.56 -> 0.751 (values from the formatBCE reference).
+      - lambda: |-
+          if (x == "Wenig empfindlich") {
+            id(okay_nabu).set_probability_cutoff(217);
+          } else if (x == "Mittel empfindlich") {
+            id(okay_nabu).set_probability_cutoff(176);
+          } else {
+            id(okay_nabu).set_probability_cutoff(143);
+          }

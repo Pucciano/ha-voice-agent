@@ -1,0 +1,63 @@
+# AIVI satellite: base package
+#
+# Board, core services and network for a Seeed XIAO ESP32-S3 Plus soldered
+# onto a reSpeaker XVF3800. The device file supplies the Wi-Fi credentials
+# and the API key, because every satellite gets its own key.
+
+substitutions:
+  log_level: DEBUG
+  # formatBCE/Respeaker-XVF3800-ESPHome-integration: respeaker_xvf3800 C++
+  # component and the XMOS firmware image. Pinned to the reviewed commit.
+  xvf3800_ref: 7b96e8b00a60174441d09c5c0b26378cccd0b1f2
+  # formatBCE/esphome, branch respeaker_microphone: i2s_audio patched on top
+  # of ESPHome 2026.9.0. The stock microphone does not work with the XVF3800.
+  i2s_audio_ref: 9f8c1d07dec4dd81d4b19d53621a63ede85391f1
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  # The i2s_audio fork is based on this release.
+  min_version: 2026.9.0
+
+esp32:
+  variant: esp32s3
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: ${log_level}
+  # UART0 pins (GPIO43/44) carry I2S data, so logs go over native USB only.
+  hardware_uart: USB_SERIAL_JTAG
+
+wifi:
+  id: wifi_id
+  power_save_mode: none
+
+api:
+  id: api_id
+
+ota:
+  - platform: esphome
+    # Uploads are encrypted and authenticated with the device's api key.
+    encryption: {}
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/formatBCE/esphome
+      ref: ${i2s_audio_ref}
+    components: [i2s_audio]
+    refresh: never
+  - source:
+      type: git
+      url: https://github.com/formatBCE/Respeaker-XVF3800-ESPHome-integration
+      ref: ${xvf3800_ref}
+    components: [respeaker_xvf3800]
+    refresh: never

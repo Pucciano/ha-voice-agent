@@ -1,0 +1,76 @@
+# Home Assistant automation: play the spoken answer of an AIVI satellite on
+# the speaker of its room (plan phases 6 and 7). It is deployed through the
+# automation config API; keep this copy and Home Assistant in sync.
+#
+# Fail closed. Nothing plays unless all of these hold:
+# - the satellite_id is listed and the event comes from that satellite's device
+# - the URL points to Home Assistant's TTS proxy
+# - the room speaker is not grouped with other rooms (plan section 19)
+# There is no fallback speaker.
+#
+# Only the path of the URL goes to the speaker. Home Assistant puts its own
+# address in front of it, so the speaker can only fetch the answer from Home
+# Assistant, and this file needs no network address.
+#
+# The answer plays at the room's answer volume; the previous volume comes back
+# once the answer has finished. The answer replaces running music, which does
+# not resume (plan section 20, version 1).
+id: aivi_tts_router
+alias: AIVI Antwort-Routing
+description: Spielt die Antwort eines AIVI-Satelliten nur auf dem Lautsprecher seines Raums ab.
+mode: parallel
+max: 10
+triggers:
+  - trigger: event
+    event_type: esphome.aivi_tts_uri
+variables:
+  # satellite_id -> Home Assistant device of the satellite, the room speaker
+  # and the volume (0-1) the answer plays at
+  rooms:
+    living_room:
+      device_id: 9d60b29d2391e4609bfceb502da83836
+      speaker: media_player.pulse_flex_living_room_1
+      volume: 0.3
+  room: "{{ rooms.get(trigger.event.data.satellite_id | default(''), {}) }}"
+  speaker: "{{ room.speaker | default('') }}"
+  # http://<host>/api/tts_proxy/<token>.mp3 -> /api/tts_proxy/<token>.mp3
+  tts_path: "{{ trigger.event.data.uri | default('') | regex_replace('^https?://[^/]+', '') }}"
+conditions:
+  - alias: Known satellite, sent by its own device
+    condition: template
+    value_template: "{{ speaker != '' and trigger.event.data.device_id | default('') == room.device_id }}"
+  - alias: Answer URL from the Home Assistant TTS proxy
+    condition: template
+    value_template: "{{ tts_path is match('/api/tts_proxy/[A-Za-z0-9_.-]+$') }}"
+  - alias: Speaker not grouped with other rooms
+    condition: template
+    value_template: "{{ (state_attr(speaker, 'group_members') or []) | reject('eq', speaker) | list | length == 0 }}"
+actions:
+  - variables:
+      previous_volume: "{{ state_attr(speaker, 'volume_level') }}"
+  - action: media_player.volume_set
+    target:
+      entity_id: "{{ speaker }}"
+    data:
+      volume_level: "{{ room.volume | default(0.3) }}"
+  - action: media_player.play_media
+    target:
+      entity_id: "{{ speaker }}"
+    data:
+      media_content_id: "{{ tts_path }}"
+      media_content_type: music
+  # Short answers can end before Home Assistant sees "playing", so both waits
+  # time out instead of blocking.
+  - wait_template: "{{ is_state(speaker, 'playing') }}"
+    timeout: "00:00:10"
+  - wait_template: "{{ not is_state(speaker, 'playing') }}"
+    timeout: "00:02:00"
+  - if:
+      - condition: template
+        value_template: "{{ previous_volume is number }}"
+    then:
+      - action: media_player.volume_set
+        target:
+          entity_id: "{{ speaker }}"
+        data:
+          volume_level: "{{ previous_volume }}"
