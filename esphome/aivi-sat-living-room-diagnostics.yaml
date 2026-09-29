@@ -1,0 +1,9 @@
+# AIVI satellite: diagnostic build of the living room satellite
+#
+# The regular device plus the XVF3800 diagnostics package. Flash it with
+# `make sat-diag SAT=living-room DEVICE=<ip-address>`, go back with
+# `make sat-flash`. See docs/satellite_flashing.md.
+
+packages:
+  device: !include aivi-sat-living-room.yaml
+  diagnostics: !include packages/aivi-xvf3800-diagnostics.yaml

@@ -1,0 +1,281 @@
+# AIVI satellite: XVF3800 diagnostics package
+#
+# A diagnostic build for a satellite that hears nothing, not for everyday use.
+# Flash it with `make sat-diag`, go back with `make sat-flash`. It shows what
+# happens inside the XVF3800 and can repair its flash:
+#
+#   Diagnose Dienste   status of every probed XMOS servicer: 00 = answered.
+#                      40 (retry) or 44 (queue full) on the aec, am and pp
+#                      servicers means the audio pipeline is not running.
+#   Diagnose Pins      pulls and share of high samples on GPIO43 (data from
+#                      the XVF3800), BCLK, LRCLK, GPIO9 (MCLK line) and GPIO44
+#                      (data to the XVF3800). GPIO43 has a pull-up, so
+#                      "high=0" means the XVF3800 drives zeros; a broken
+#                      connection would read high.
+#   Sensors            speech energy, microphone gain, AGC, DSP idle time and
+#                      the output routing, once the audio servicers answer.
+#
+# Every probe is also logged at INFO: "probe <name> <resid>/<cmd> status=...".
+#
+# Controls:
+#   Diagnose Ausgang links Quelle        routes the left output (ESP32 channel
+#                                        0) to raw microphone samples.
+#   Diagnose XVF3800 Neustart            reboots only the XVF3800.
+#   Diagnose XVF3800 Konfiguration löschen
+#                                        removes parameters saved in the
+#                                        XVF3800 flash, then reboots it.
+#   Diagnose XVF3800 Firmware flashen    rewrites the DFU upgrade slot with
+#                                        the embedded image over I2C (about
+#                                        4.5 minutes, keep the power on).
+#   Diagnose GPIO9 und GPIO44 hochohmig  stops the ESP32 from loading either
+#                                        line.
+#
+# The firmware block embeds the pinned XVF3800 image. The component flashes it
+# at boot only when the board reports a different version.
+#
+# Requires aivi-base.yaml, aivi-xvf3800.yaml and aivi-leds.yaml.
+
+esphome:
+  includes:
+    - packages/aivi-xvf3800-diagnostics.h
+
+globals:
+  # Stops the probes while the XVF3800 is cleared or flashed.
+  - id: diag_pause
+    type: bool
+    initial_value: "false"
+  # Left output mux at the first successful probe; -1 = not read yet.
+  - id: diag_left_category
+    type: int
+    initial_value: "-1"
+  - id: diag_left_source
+    type: int
+    initial_value: "-1"
+
+logger:
+  logs:
+    # The driver logs its own busy answers, e.g. of the direction poll.
+    respeaker_xvf3800: DEBUG
+
+respeaker_xvf3800:
+  led_beam_sensor:
+    name: Diagnose LED-Richtung
+    internal: false
+    update_interval: 1s
+  firmware:
+    url: https://github.com/formatBCE/Respeaker-XVF3800-ESPHome-integration/raw/${xvf3800_ref}/application_xvf3800_inthost-lr48-sqr-i2c-v1.0.7-release.bin
+    version: "1.0.7"
+    md5: 043a848f544ff2c7265ac19685daf5de
+    on_begin:
+      - logger.log: "XVF3800 DFU: begin"
+    on_progress:
+      - logger.log:
+          format: "XVF3800 DFU: %.1f%%"
+          args: [x]
+    on_end:
+      - logger.log: "XVF3800 DFU: complete"
+      - component.resume: beam_direction
+      - component.resume: mic_mute_switch
+      - lambda: id(diag_pause) = false;
+    on_error:
+      - logger.log:
+          level: ERROR
+          format: "XVF3800 DFU: error %u"
+          args: [x]
+      - component.resume: beam_direction
+      - component.resume: mic_mute_switch
+      - lambda: id(diag_pause) = false;
+
+sensor:
+  - platform: template
+    id: diag_speech_energy
+    name: Diagnose Sprachenergie
+    entity_category: diagnostic
+    accuracy_decimals: 6
+    update_interval: never
+  - platform: template
+    id: diag_mic_gain
+    name: Diagnose Mikrofon-Gain
+    entity_category: diagnostic
+    accuracy_decimals: 3
+    update_interval: never
+  - platform: template
+    id: diag_agc_gain
+    name: Diagnose AGC-Gain
+    entity_category: diagnostic
+    accuracy_decimals: 3
+    update_interval: never
+  - platform: template
+    id: diag_agc_on
+    name: Diagnose AGC an
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: diag_idle_time
+    name: Diagnose DSP-Leerlauf
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+
+text_sensor:
+  - platform: template
+    id: diag_services
+    name: Diagnose Dienste
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: diag_pins
+    name: Diagnose Pins
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: diag_gpo
+    name: Diagnose GPO
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: diag_output_left
+    name: Diagnose Ausgang links
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: diag_output_right
+    name: Diagnose Ausgang rechts
+    entity_category: diagnostic
+    update_interval: never
+
+interval:
+  # One probe per tick. A probe blocks up to about 100 ms while a servicer is
+  # busy, so the ticks stay apart.
+  - interval: 400ms
+    then:
+      - lambda: |-
+          if (id(respeaker).is_failed() || id(diag_pause)) return;
+          ESP_LOGI("diag", "%s", aivi_diagnostics::probe_next(id(respeaker)).c_str());
+  - interval: 2s
+    then:
+      - lambda: |-
+          using namespace aivi_diagnostics;
+          id(diag_pins).publish_state(pin_text());
+          id(diag_services).publish_state(probe_summary());
+          id(diag_speech_energy).publish_state(speech_energy());
+          id(diag_mic_gain).publish_state(probe_float("am_mic_gain"));
+          id(diag_agc_gain).publish_state(probe_float("pp_agc_gain"));
+          id(diag_agc_on).publish_state(probe_int32("pp_agc_on"));
+          id(diag_idle_time).publish_state(probe_int32("am_idle_time"));
+          if (const auto *left = probe_ok("am_op_left")) {
+            if (id(diag_left_category) < 0) {
+              id(diag_left_category) = left->data[0];
+              id(diag_left_source) = left->data[1];
+              ESP_LOGI("diag", "Left output at start: %u/%u", left->data[0], left->data[1]);
+            }
+          }
+          if (!probe_mux("am_op_left").empty()) id(diag_output_left).publish_state(probe_mux("am_op_left"));
+          if (!probe_mux("am_op_right").empty()) id(diag_output_right).publish_state(probe_mux("am_op_right"));
+          if (const auto *gpo = probe_ok("gpo_values")) {
+            // X0D11, X0D30 (mute), X0D31 (amplifier), X0D33, X0D39.
+            char text[32];
+            snprintf(text, sizeof(text), "%u %u %u %u %u", gpo->data[0], gpo->data[1], gpo->data[2],
+                     gpo->data[3], gpo->data[4]);
+            id(diag_gpo).publish_state(text);
+          }
+
+button:
+  # DFU reboot (240/89): resets the XVF3800 chip, the ESP32 keeps running.
+  - platform: template
+    name: Diagnose XVF3800 Neustart
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          const uint8_t payload[1] = {0};
+          const bool ok = aivi_diagnostics::send(id(respeaker), 240, 89, payload, sizeof(payload));
+          ESP_LOGI("diag", "XVF3800 reboot request: %s", ok ? "sent" : "failed");
+  # CLEAR_CONFIGURATION (48/10), then a reboot to apply the image defaults.
+  - platform: template
+    name: Diagnose XVF3800 Konfiguration löschen
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          id(diag_pause) = true;
+          const uint8_t payload[1] = {1};
+          const uint8_t status = aivi_diagnostics::write(id(respeaker), 48, 10, payload, sizeof(payload));
+          ESP_LOGI("diag", "CLEAR_CONFIGURATION: status=0x%02x", status);
+      - delay: 2s
+      - lambda: |-
+          const uint8_t payload[1] = {0};
+          const bool ok = aivi_diagnostics::send(id(respeaker), 240, 89, payload, sizeof(payload));
+          ESP_LOGI("diag", "XVF3800 reboot after clear: %s", ok ? "sent" : "failed");
+      - delay: 4s
+      - lambda: id(diag_pause) = false;
+  # Pauses the other I2C traffic of the driver while the DFU runs.
+  - platform: template
+    name: Diagnose XVF3800 Firmware flashen
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(diag_pause) = true;
+      - component.suspend: beam_direction
+      - component.suspend: mic_mute_switch
+      - delay: 1s
+      - respeaker_xvf3800.flash:
+
+switch:
+  # Off restores the boot state: GPIO9 floating, GPIO44 with the pull-up of
+  # the UART0 RX pad.
+  - platform: template
+    id: diag_float_pins
+    name: Diagnose GPIO9 und GPIO44 hochohmig
+    entity_category: diagnostic
+    optimistic: true
+    restore_mode: DISABLED
+    turn_on_action:
+      - lambda: |-
+          for (gpio_num_t pin : {GPIO_NUM_9, GPIO_NUM_44}) {
+            gpio_set_direction(pin, GPIO_MODE_INPUT);
+            gpio_set_pull_mode(pin, GPIO_FLOATING);
+          }
+          ESP_LOGI("diag", "GPIO9 and GPIO44 floating");
+    turn_off_action:
+      - lambda: |-
+          gpio_set_pull_mode(GPIO_NUM_9, GPIO_FLOATING);
+          gpio_set_pull_mode(GPIO_NUM_44, GPIO_PULLUP_ONLY);
+          ESP_LOGI("diag", "GPIO9 floating, GPIO44 pull-up");
+
+select:
+  # The wake word and the pipeline use channel 1 and are not affected.
+  - platform: template
+    id: diag_left_route
+    name: Diagnose Ausgang links Quelle
+    entity_category: diagnostic
+    optimistic: true
+    restore_value: false
+    options:
+      - Original
+      - Rohmikrofon 1
+      - Rohmikrofon 2
+      - Rohmikrofon 3
+      - Rohmikrofon 4
+      - Mikrofon nach Gain 1
+      - Auto-Beam
+    initial_option: Original
+    set_action:
+      - lambda: |-
+          // Output mux categories: 1 raw microphone, 3 microphone after gain,
+          // 6 auto-select beam; the source picks the microphone or beam.
+          int category, source;
+          if (x == "Original") {
+            category = id(diag_left_category);
+            source = id(diag_left_source);
+          } else if (x == "Rohmikrofon 1") { category = 1; source = 0; }
+          else if (x == "Rohmikrofon 2") { category = 1; source = 1; }
+          else if (x == "Rohmikrofon 3") { category = 1; source = 2; }
+          else if (x == "Rohmikrofon 4") { category = 1; source = 3; }
+          else if (x == "Mikrofon nach Gain 1") { category = 3; source = 0; }
+          else { category = 6; source = 0; }
+          if (category < 0) {
+            ESP_LOGW("diag", "Original left output not known yet");
+            return;
+          }
+          const uint8_t payload[2] = {static_cast<uint8_t>(category), static_cast<uint8_t>(source)};
+          const uint8_t status = aivi_diagnostics::write(id(respeaker), 35, 15, payload, sizeof(payload));
+          ESP_LOGI("diag", "Left output -> %d/%d: status=0x%02x", category, source, status);

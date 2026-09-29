@@ -1,10 +1,12 @@
 .PHONY: dev-up dev-up-debug dev-down prod-up prod-down lint format test eval \
-	sat-config sat-compile sat-flash sat-logs sat-chip sat-xvf3800
+	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800
 
 ESPHOME_VERSION := 2026.9.0
 ESPHOME := uvx --from esphome==$(ESPHOME_VERSION) esphome
 SAT ?= living-room
 SAT_CONFIG := esphome/aivi-sat-$(SAT).yaml
+# Diagnostic build of the same device (docs/satellite_flashing.md).
+SAT_DIAG_CONFIG := esphome/aivi-sat-$(SAT)-diagnostics.yaml
 # DEVICE=/dev/cu.usbmodemXXXX for USB, an IP address or OTA for network.
 SAT_DEVICE = $(if $(DEVICE),--device $(DEVICE))
 
@@ -43,6 +45,9 @@ sat-compile:
 
 sat-flash:
 	$(ESPHOME) run $(SAT_CONFIG) $(SAT_DEVICE)
+
+sat-diag:
+	$(ESPHOME) run $(SAT_DIAG_CONFIG) $(SAT_DEVICE)
 
 sat-logs:
 	$(ESPHOME) logs $(SAT_CONFIG) $(SAT_DEVICE)
