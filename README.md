@@ -228,6 +228,8 @@ Further setup and operational guides live in the `docs/` directory:
   workflow, and evaluation metrics.
 - `docs/satellite_flashing.md` is the per-room runbook for flashing a
   satellite board (XVF3800 firmware, ESP32, verification).
+- `docs/jetson_setup.md` sets up the Jetson Nano speech server
+  (Speech-to-Phrase and Piper over Wyoming) for the first test phase.
 
 ## Makefile helpers
 

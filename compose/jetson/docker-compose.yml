@@ -1,0 +1,68 @@
+name: aivi-jetson
+
+# Speech services for Home Assistant on the Jetson Nano (plan phase 4). All
+# of them run on the CPU:
+#   speech-to-phrase  speech to text, Wyoming port 10300
+#   piper             text to speech, Wyoming port 10200
+#   whisper           speech to text for comparison only, port 10301,
+#                     started with --profile compare
+#
+# Models are downloaded once into /srv/wyoming and then used offline.
+#
+# Logging follows the Docker daemon default, which aivi-logmode switches
+# between prod (nothing kept) and dev. Do not add per-service logging here.
+#
+# The .env file next to this one (root:docker, 0640, never committed) sets
+# HASS_WEBSOCKET_URI and HASS_TOKEN; see docs/jetson_setup.md.
+#
+# custom_sentences/ holds extra speech-to-phrase sentences, one directory per
+# language. They are read when the model is trained, i.e. on every start.
+
+services:
+  speech-to-phrase:
+    image: rhasspy/wyoming-speech-to-phrase:1.4.3
+    restart: unless-stopped
+    ports:
+      - "10300:10300"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - /srv/wyoming/speech-to-phrase/models:/models
+      - /srv/wyoming/speech-to-phrase/train:/train
+      - ./custom_sentences:/custom_sentences:ro
+    command:
+      - --hass-websocket-uri
+      - ${HASS_WEBSOCKET_URI:?HASS_WEBSOCKET_URI missing in .env}
+      - --hass-token
+      - ${HASS_TOKEN:?HASS_TOKEN missing in .env}
+      - --custom-sentences-dir
+      - /custom_sentences
+      - --retrain-on-start
+
+  piper:
+    image: rhasspy/wyoming-piper:2.5.2
+    restart: unless-stopped
+    ports:
+      - "10200:10200"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - /srv/wyoming/piper/data:/data
+    command:
+      - --voice
+      - ${PIPER_VOICE:-de_DE-thorsten-medium}
+
+  whisper:
+    image: rhasspy/wyoming-whisper:3.8.1
+    profiles: ["compare"]
+    ports:
+      - "10301:10300"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - /srv/wyoming/whisper/data:/data
+    command:
+      - --model
+      - ${WHISPER_MODEL:-base-int8}
+      - --language
+      - de
