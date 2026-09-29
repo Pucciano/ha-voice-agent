@@ -3,8 +3,16 @@
 Positive recordings live in recordings/positive/<speaker>/, one or more files
 per person with many "Hey AIVI" and short pauses in between. Negative
 recordings in recordings/negative/ hold everyday sound without the wake word.
-Any audio format works. The clips are regenerated on every run; list clip
-names in recordings/excluded.txt to drop badly cut ones for good.
+Any audio format works. The clips are regenerated on every run.
+
+Voice activity detection finds the phrases; each is trimmed to its loud
+part. Segments much quieter than the speaker are background sounds, and
+segments at the edge of a recording may be cut off; neither becomes a clip.
+Whisper then checks every clip for "Hey" followed by an "i", "ai" or "e"
+sound. Clips that fail go to clips/real_positive/review/ instead of the
+training: listen to them and list the good ones in recordings/accepted.txt.
+Clip names in recordings/excluded.txt are dropped for good. clips.csv lists
+every segment with its level, transcripts and verdict.
 """
 
 import argparse
@@ -27,6 +35,7 @@ from common import (
     stable_fraction,
     write_wav,
 )
+from speech_check import SpeechCheck
 
 AUDIO_SUFFIXES = {
     ".aac",
@@ -41,6 +50,19 @@ AUDIO_SUFFIXES = {
     ".wav",
     ".webm",
 }
+CSV_FIELDS = (
+    "clip",
+    "verdict",
+    "speaker",
+    "recording",
+    "start_s",
+    "duration_s",
+    "peak_dbfs",
+    "transcript_en",
+    "transcript_de",
+)
+# Energy frames for trimming a segment to its loud part.
+TRIM_FRAME = SAMPLE_RATE // 100
 
 _LOGGER = logging.getLogger("import")
 
@@ -63,46 +85,94 @@ def audio_files(directory: Path) -> list[Path]:
     )
 
 
-def find_segments(audio: np.ndarray, settings: dict) -> list[tuple[int, int]]:
-    """Voice activity segments as (start, end) sample indices."""
+def name_list(path: Path) -> set[str]:
+    """Clip names listed in a text file, one per line."""
+
+    if not path.is_file():
+        return set()
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+
+def voice_runs(audio: np.ndarray, settings: dict) -> list[tuple[int, int]]:
+    """Voice activity runs as (start, end) samples; short gaps are closed."""
 
     frame = SAMPLE_RATE * settings["frame_ms"] // 1000
     pcm = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
     vad = webrtcvad.Vad(settings["vad_mode"])
-    frames = len(pcm) // frame
-    speech = [
-        vad.is_speech(pcm[i * frame : (i + 1) * frame].tobytes(), SAMPLE_RATE)
-        for i in range(frames)
-    ]
-
-    # Runs of speech frames; short gaps (the pause in "Hey, AIVI") are closed.
     max_gap = int(settings["merge_gap_s"] * SAMPLE_RATE / frame)
     runs: list[list[int]] = []
-    for index, active in enumerate(speech):
-        if not active:
+    for index in range(len(pcm) // frame):
+        chunk = pcm[index * frame : (index + 1) * frame].tobytes()
+        if not vad.is_speech(chunk, SAMPLE_RATE):
             continue
         if runs and index - runs[-1][1] <= max_gap:
             runs[-1][1] = index + 1
         else:
             runs.append([index, index + 1])
+    return [(first * frame, last * frame) for first, last in runs]
 
+
+def loud_part(
+    audio: np.ndarray, start: int, end: int, trim_db: float
+) -> tuple[int, int]:
+    """The part of a run at most trim_db below its loudest 10 ms."""
+
+    frames = (end - start) // TRIM_FRAME
+    if frames == 0:
+        return start, end
+    chunk = audio[start : start + frames * TRIM_FRAME].reshape(frames, -1)
+    level = 20.0 * np.log10(np.sqrt(np.mean(chunk**2, axis=1)) + 1e-9)
+    loud = np.flatnonzero(level >= level.max() - trim_db)
+    return (
+        start + int(loud[0]) * TRIM_FRAME,
+        start + int(loud[-1] + 1) * TRIM_FRAME,
+    )
+
+
+def find_segments(audio: np.ndarray, settings: dict) -> list[tuple[int, int]]:
+    """Candidate phrase segments: trimmed, padded, not overlapping."""
+
+    trimmed = [
+        loud_part(audio, start, end, settings["trim_db"])
+        for start, end in voice_runs(audio, settings)
+    ]
     padding = int(settings["padding_s"] * SAMPLE_RATE)
     segments = []
-    for number, (first, last) in enumerate(runs):
-        start = first * frame - padding
-        end = last * frame + padding
+    for number, (start, end) in enumerate(trimmed):
+        low, high = start - padding, end + padding
         # Never reach into the neighbouring segment.
         if number > 0:
-            start = max(
-                start, (runs[number - 1][1] * frame + first * frame) // 2
-            )
-        if number + 1 < len(runs):
-            end = min(end, (last * frame + runs[number + 1][0] * frame) // 2)
-        start, end = max(start, 0), min(end, len(audio))
-        duration = (end - start) / SAMPLE_RATE
-        if settings["min_duration_s"] <= duration <= settings["max_duration_s"]:
-            segments.append((start, end))
+            low = max(low, (trimmed[number - 1][1] + start) // 2)
+        if number + 1 < len(trimmed):
+            high = min(high, (end + trimmed[number + 1][0]) // 2)
+        segments.append((max(low, 0), min(high, len(audio))))
     return segments
+
+
+def rule_out(
+    audio: np.ndarray,
+    segment: tuple[int, int],
+    loudest: float,
+    settings: dict,
+) -> str:
+    """Why a segment cannot be a wake word clip, or an empty string."""
+
+    start, end = segment
+    duration = (end - start) / SAMPLE_RATE
+    edge = int(settings["edge_s"] * SAMPLE_RATE)
+    if dbfs(audio[start:end]) < loudest - settings["noise_gap_db"]:
+        return "noise"
+    if start <= edge or end >= len(audio) - edge:
+        return "cut off"
+    if duration < settings["min_duration_s"]:
+        return "too short"
+    if duration > settings["max_duration_s"]:
+        return "too long"
+    return ""
 
 
 def split_name(key: str, split: dict) -> str:
@@ -116,64 +186,116 @@ def split_name(key: str, split: dict) -> str:
     return "test"
 
 
-def import_positive(config: dict, paths: Paths, excluded: set[str]) -> None:
+def import_recording(
+    recording: Path,
+    speaker: str,
+    config: dict,
+    check: SpeechCheck,
+    lists: dict[str, set[str]],
+    target: Path,
+) -> list[dict]:
+    """Rows for all segments of one recording; clips are written."""
+
+    settings = config["recordings"]["segment"]
+    audio = read_audio(recording)
+    segments = find_segments(audio, settings)
+    peaks = [dbfs(audio[start:end]) for start, end in segments]
+    loudest = float(np.percentile(peaks, 90)) if peaks else 0.0
+    rows, clips = [], []
+    for number, segment in enumerate(segments):
+        start, end = segment
+        row = {
+            "clip": f"{speaker}__{recording.stem}__{number:03d}.wav",
+            "verdict": rule_out(audio, segment, loudest, settings),
+            "speaker": speaker,
+            "recording": str(recording.relative_to(REPO_ROOT)),
+            "start_s": f"{start / SAMPLE_RATE:.2f}",
+            "duration_s": f"{(end - start) / SAMPLE_RATE:.2f}",
+            "peak_dbfs": f"{peaks[number]:.1f}",
+            "transcript_en": "",
+            "transcript_de": "",
+        }
+        rows.append(row)
+        if not row["verdict"]:
+            clips.append((row, audio[start:end]))
+    # One Whisper model after the other: MLX keeps only one loaded.
+    for row, clip in clips:
+        row["transcript_en"] = check.transcribe(clip)
+    for row, clip in clips:
+        row["transcript_de"] = check.transcribe_second(clip)
+    pattern = config["recordings"]["wake_word_pattern"]
+    for row, clip in clips:
+        heard = check.matches(pattern, row["transcript_en"]) or check.matches(
+            pattern, row["transcript_de"]
+        )
+        if row["clip"] in lists["excluded"]:
+            row["verdict"] = "excluded"
+            continue
+        if heard or row["clip"] in lists["accepted"]:
+            row["verdict"] = split_name(
+                row["clip"], config["recordings"]["split"]
+            )
+        else:
+            row["verdict"] = "review"
+        write_wav(target / row["verdict"] / row["clip"], clip)
+    return rows
+
+
+def import_positive(config: dict, paths: Paths, check: SpeechCheck) -> None:
     """Cut the wake word recordings of every speaker into clips."""
 
     source = paths.recordings / "positive"
     target = paths.clips / "real_positive"
     reset_directory(target)
-    rows = []
-    counts: dict[str, dict[str, int]] = {}
+    lists = {
+        "accepted": name_list(paths.recordings / "accepted.txt"),
+        "excluded": name_list(paths.recordings / "excluded.txt"),
+    }
+    rows: list[dict] = []
     speakers = (
         sorted(p for p in source.iterdir() if p.is_dir())
         if source.is_dir()
         else []
     )
     for speaker_dir in speakers:
-        speaker = speaker_dir.name
         for recording in audio_files(speaker_dir):
-            audio = read_audio(recording)
-            segments = find_segments(audio, config["recordings"]["segment"])
-            _LOGGER.info(
-                "%s/%s: %d clips from %.0f s",
-                speaker,
-                recording.name,
-                len(segments),
-                len(audio) / SAMPLE_RATE,
+            recording_rows = import_recording(
+                recording, speaker_dir.name, config, check, lists, target
             )
-            for number, (start, end) in enumerate(segments):
-                name = f"{speaker}__{recording.stem}__{number:03d}.wav"
-                if name in excluded:
-                    continue
-                split = split_name(name, config["recordings"]["split"])
-                clip = audio[start:end]
-                write_wav(target / split / name, clip)
-                counts.setdefault(
-                    speaker, {"train": 0, "validation": 0, "test": 0}
-                )
-                counts[speaker][split] += 1
-                rows.append(
-                    {
-                        "clip": name,
-                        "split": split,
-                        "speaker": speaker,
-                        "recording": str(recording.relative_to(REPO_ROOT)),
-                        "start_s": f"{start / SAMPLE_RATE:.2f}",
-                        "duration_s": f"{(end - start) / SAMPLE_RATE:.2f}",
-                        "peak_dbfs": f"{dbfs(clip):.1f}",
-                    }
-                )
-    if rows:
-        with (target / "clips.csv").open(
-            "w", newline="", encoding="utf-8"
-        ) as out:
-            writer = csv.DictWriter(out, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-    for speaker, split_counts in counts.items():
-        _LOGGER.info("%s: %s", speaker, split_counts)
+            verdicts: dict[str, int] = {}
+            for row in recording_rows:
+                verdicts[row["verdict"]] = verdicts.get(row["verdict"], 0) + 1
+            _LOGGER.info(
+                "%s/%s: %s",
+                speaker_dir.name,
+                recording.name,
+                ", ".join(f"{v} {n}" for v, n in sorted(verdicts.items())),
+            )
+            rows.extend(recording_rows)
     if not rows:
         _LOGGER.warning("No wake word recordings in %s", source)
+        return
+    with (target / "clips.csv").open("w", newline="", encoding="utf-8") as out:
+        writer = csv.DictWriter(out, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    review = [row for row in rows if row["verdict"] == "review"]
+    for row in review:
+        _LOGGER.info(
+            "review %s: %r / %r",
+            row["clip"],
+            row["transcript_en"],
+            row["transcript_de"],
+        )
+    used = sum(
+        row["verdict"] in ("train", "validation", "test") for row in rows
+    )
+    _LOGGER.info(
+        "%d wake word clips, %d to review in %s",
+        used,
+        len(review),
+        (target / "review").relative_to(REPO_ROOT),
+    )
 
 
 def import_negative(config: dict, paths: Paths) -> None:
@@ -214,15 +336,9 @@ def main() -> None:
     setup_logging(args.verbose)
     config = load_config()
     paths = Paths.from_config(config)
-    excluded_file = paths.recordings / "excluded.txt"
-    excluded = set()
-    if excluded_file.is_file():
-        excluded = {
-            line.strip()
-            for line in excluded_file.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.startswith("#")
-        }
-    import_positive(config, paths, excluded)
+    import_positive(
+        config, paths, SpeechCheck(config["samples"]["check"], paths)
+    )
     import_negative(config, paths)
 
 

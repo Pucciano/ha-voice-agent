@@ -180,10 +180,28 @@ recordings:
   segment:
     vad_mode: 2
     frame_ms: 30
-    merge_gap_s: 0.3
+    # Closes the pause in "Hey, AIVI".
+    merge_gap_s: 0.4
+    # Only the part of a voice activity run at most trim_db below its
+    # loudest 10 ms counts, so reverberation, music or noise after the
+    # phrase does not stretch the clip.
+    trim_db: 25
     padding_s: 0.15
+    # The model looks at the last 3.0 s, so a phrase with some
+    # reverberation still fits.
     min_duration_s: 0.4
-    max_duration_s: 1.8
+    max_duration_s: 2.2
+    # Segments more than noise_gap_db below the loud segments of their
+    # recording are background sounds, not the speaker.
+    noise_gap_db: 20
+    # Segments this close to the start or end of a recording may be cut
+    # off.
+    edge_s: 0.15
+  # Whisper must hear "Hey" followed by an "i", "ai" or "e" sound in a wake
+  # word clip (letters only, lower case). It knows no German "Ei-wi" and
+  # writes "Hey, I.B.", "Hey, I mean" or "Here, Ivy" instead. Clips that do
+  # not match go to clips/real_positive/review/ for a listen.
+  wake_word_pattern: "^(hey|hei|hay|ey|he|here)(i|ai|ei|a|e)"
   # Stable split per clip: the test part is never trained on.
   split:
     train: 0.7
