@@ -226,6 +226,8 @@ Further setup and operational guides live in the `docs/` directory:
   the llm_proxy.
 - `docs/training_pipeline.md` details dataset schemas, the capture-to-training
   workflow, and evaluation metrics.
+- `docs/jetson_setup.md` sets up the Jetson Nano speech server
+  (Speech-to-Phrase and Piper over Wyoming) for the first test phase.
 
 ## Makefile helpers
 
