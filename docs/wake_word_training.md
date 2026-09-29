@@ -208,15 +208,37 @@ of everyday sound go to `dev/datasets/wake_word/recordings/negative/`.
 make ww-import
 ```
 
-Voice activity detection cuts every positive recording into single clips of
-0.4 to 1.8 s. It prints how many clips each recording gave. Each clip keeps
-its split for good: 70 % training, 10 % validation, 20 % test. The test clips
-are never trained on; they measure the recall.
+Voice activity detection finds the phrases in every positive recording.
+Each phrase is trimmed to its loud part, so reverberation or music after it
+does not stretch the clip; clips are 0.4 to 2.2 s long. The import drops
+three kinds of segments:
 
-`dev/datasets/wake_word/clips/real_positive/clips.csv` lists every clip with
-its recording, position and level. Listen to some of them. Put the names of
-badly cut clips, one per line, into
-`dev/datasets/wake_word/recordings/excluded.txt` and import again.
+- noise: more than 20 dB below the speaker's phrases in the same
+  recording (clicks, distant voices, the TV);
+- cut off: at the very start or end of a recording;
+- too short or too long, e.g. two phrases without a pause.
+
+Whisper then transcribes each clip in English and in German. It knows no
+"Ei-wi" and writes things like "Hey, I.B.", "Hey, I mean" or "Here, Ivy",
+so the check only asks for "Hey" followed by an "i", "ai" or "e" sound. A
+clip that fails ("Hey." alone, "Okay.", nothing) goes to
+`dev/datasets/wake_word/clips/real_positive/review/` instead of the training.
+Listen to those:
+
+```bash
+for f in dev/datasets/wake_word/clips/real_positive/review/*.wav; do echo "$f"; afplay "$f"; done
+```
+
+Put the names of good ones, one per line, into
+`dev/datasets/wake_word/recordings/accepted.txt`; names in `excluded.txt` in
+the same folder are dropped even if Whisper accepts them. Then import again.
+`clips.csv` next to the clips lists every segment with its position, level,
+both transcripts and the verdict. The clip names depend on the
+segmentation, so check the lists again after changing its settings.
+
+Each accepted clip keeps its split for good: 70 % training, 10 %
+validation, 20 % test. The test clips are never trained on; they measure
+the recall.
 
 Everyday recordings are cut into 10 s training chunks. The last quarter of
 each stays one piece for the false accept measurement.
@@ -309,6 +331,7 @@ hour. The manifest `hey_aivi.json` next to the model takes the cutoff for
 |---|---|---|
 | Recorder: Home Assistant still holds the voice assistant | Only one voice assistant client is allowed | Disable the ESPHome entry in Home Assistant |
 | A take never starts | "Okay Nabu" not detected, or microphone muted | Check the ring; switch `Mikrofon stumm` off |
-| Few or no clips from a recording | Too quiet or no pauses between the phrases | Speak up, pause two seconds, check `clips.csv` |
+| Few or no clips from a recording | Too quiet, or no pauses between the phrases | Speak up, pause two seconds, check `clips.csv` |
+| Many clips to review | Whisper hears no "Hey" at the start | Listen; add the good ones to `accepted.txt` |
 | German preview samples are seconds long | Duration noise too high | Lower `noise_scale_ws` for `de_DE-mls-medium` |
 | `Missing checkout` | Setup not run | `make ww-setup` |
