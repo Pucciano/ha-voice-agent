@@ -1,0 +1,46 @@
+[project]
+name = "aivi-wake-word"
+version = "0.1.0"
+description = "Train the AIVI satellite wake word with microWakeWord."
+readme = "../../docs/wake_word_training.md"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+authors = [{ name = "ha-voice-agent contributors" }]
+
+dependencies = [
+  # microWakeWord runs from a pinned checkout (see config.yaml); these are
+  # its dependencies. datasets 4 decodes audio through torchcodec, 3.6 through
+  # soundfile.
+  "ai-edge-litert==2.2.0",
+  "audio-metadata",
+  "audiomentations==0.43.1",
+  "datasets==3.6.0",
+  "mmap-ninja==0.9.0",
+  "numpy>=2.0",
+  "pymicro-features==2.0.2",
+  "pyyaml>=6.0",
+  "tensorboard>=2.20",
+  "tensorflow==2.21.0",
+  "webrtcvad-wheels==2.0.14",
+  # piper-sample-generator also runs from a pinned checkout.
+  "piper-tts==1.3.0",
+  "torch==2.11.0",
+  # Checks what every synthetic sample says; MLX runs on the Apple GPU.
+  "faster-whisper==1.2.1; sys_platform != 'darwin'",
+  "mlx-whisper==0.4.3; sys_platform == 'darwin'",
+  # Downloads, satellite recording and audio handling.
+  "aioesphomeapi==46.6.0",
+  "huggingface-hub>=0.28.0,<1.0.0",
+  "pyarrow>=17.0",
+  "scipy>=1.13",
+  "soundfile>=0.12",
+  "tqdm>=4.66",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+# Fork without the attrs pin of the PyPI release, as in the microWakeWord
+# training notebook.
+audio-metadata = { git = "https://github.com/whatsnowplaying/audio-metadata", rev = "d4ebb238e6a401bb1a5aaaac60c9e2b3cb30929f" }

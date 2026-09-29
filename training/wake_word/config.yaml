@@ -1,0 +1,298 @@
+# Training configuration for the AIVI wake word (microWakeWord).
+#
+# Paths are relative to the repository root. Downloads, generated clips,
+# features and models live under dev/ and are gitignored. Recordings of the
+# household stay in dev/datasets/wake_word/recordings/ and are never
+# committed. The runbook is docs/wake_word_training.md.
+
+wake_word:
+  id: hey_aivi
+  name: Hey AIVI
+  # Spoken like English "Hey Ivy".
+  languages: [de]
+
+paths:
+  cache: dev/cache/wake_word
+  data: dev/datasets/wake_word
+  models: dev/models/wake_word
+
+# Neither project publishes a complete package: the wheels lack
+# microwakeword.audio and piper_train. Both run from these checkouts.
+vendor:
+  micro_wake_word:
+    url: https://github.com/OHF-Voice/micro-wake-word
+    commit: 4665173cd35f1cff9a61e06fc427f124766c488e
+  piper_sample_generator:
+    url: https://github.com/rhasspy/piper-sample-generator
+    commit: 2971426a55072f7d22fec416ca7800df8bd23207
+
+downloads:
+  # Piper generator that mixes the embeddings of two speakers per sample.
+  generators:
+    en_US-libritts_r-medium:
+      url: https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt
+      sha256: e95ee53770bf598c354a6e6dbfc95ccb259aeeb501d35a86be8a767429ab0ff6
+  # German Piper voices (.onnx and .onnx.json).
+  voices:
+    repo: rhasspy/piper-voices
+    revision: c10ece1aade47bb51c153c893d14e5bf8e5b7117
+    files:
+      - de/de_DE/karlsson/low/de_DE-karlsson-low
+      - de/de_DE/thorsten/medium/de_DE-thorsten-medium
+  # Room impulse responses for reverberation.
+  impulse_responses:
+    repo: davidscripka/MIT_environmental_impulse_responses
+    revision: b824a1ef2821f112fda0b9cb26e4278c62b425bb
+    pattern: 16khz/*.wav
+  # Background audio mixed into the samples.
+  background:
+    audioset:
+      repo: agkphysics/AudioSet
+      revision: 0c609e8302cf139307f639c57652032af0a88041
+      file: data/bal_train/09.parquet
+    fma:
+      repo: mchl914/fma_xsmall
+      revision: bfef24fd1e1334e4631b917c98e0dbc3dd653ab2
+      file: fma_xs.zip
+  # Precomputed negative spectrograms (cc-by-nc-4.0): speech, dinner party
+  # conversations and non-speech audio.
+  negative_features:
+    repo: kahrendt/microwakeword
+    revision: 0da95f94302ca2f4aae3b18fc6560fa6d2bba3d1
+    files: [dinner_party.zip, dinner_party_eval.zip, no_speech.zip, speech.zip]
+  # German read speech as negatives; the sets above are English. The dev and
+  # test splits of Multilingual LibriSpeech have 60 speakers in 28.6 h
+  # (cc-by-4.0); a train shard would hold only two.
+  german_speech:
+    repo: facebook/multilingual_librispeech
+    revision: 2e83e61823b4c47dcbcb1980bb88601274127609
+    files:
+      - german/dev-00000-of-00001.parquet
+      - german/test-00000-of-00001.parquet
+
+# Synthetic samples. Phrases are IPA as espeak-ng writes it; print the IPA of
+# any text with `generate_samples.py --phonemize "Hey, wie geht's?"`.
+samples:
+  # A speaker_mix generator mixes two of its speakers per sample; a piper
+  # voice speaks with one of its own few speakers. share is the fraction of
+  # each sample count. length_scales (speed, larger is slower) and
+  # noise_scale_ws (duration variation) are picked per batch; the preview
+  # uses the middle values.
+  #
+  # Measured with the Whisper check below, the English speakers say the
+  # phrases right in about 90 % of the samples, Karlsson in 67 % and
+  # Thorsten medium in about 15 % (both with the double check). Not used:
+  # for short phrases the German MLS generator invents other German words,
+  # the voices Kerstin, Ramona, Eva K and Pavoque almost never say the wake
+  # word, and Thorsten high and Thorsten emotional pass the double check
+  # in less than one sample in ten while synthesizing slowly.
+  voices:
+    en_US-libritts_r-medium:
+      kind: speaker_mix
+      share: 0.8
+      max_speakers: 600
+      length_scales: [0.75, 0.85, 1.0, 1.15, 1.3]
+      noise_scale_ws: [0.333, 0.6, 0.8]
+    de_DE-karlsson-low:
+      kind: piper
+      share: 0.16
+      double_check: true
+      length_scales: [0.85, 1.0, 1.15, 1.3]
+      noise_scale_ws: [0.4, 0.6, 0.8]
+    de_DE-thorsten-medium:
+      kind: piper
+      share: 0.02
+      double_check: true
+      length_scales: [0.85, 1.0, 1.15, 1.3]
+      noise_scale_ws: [0.4, 0.6, 0.8]
+  noise_scales: [0.5, 0.667, 0.8]
+  slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]
+  batch_size: 32
+  # Samples outside this spoken duration, or with a single sound or pause
+  # longer than max_phoneme_s (speaker_mix only), are dropped as generator
+  # artifacts.
+  min_duration_s: 0.35
+  max_duration_s: 1.45
+  max_phoneme_s: 0.35
+  preview_per_phrase: 6
+  # Whisper (English) transcribes every sample. A positive sample is kept
+  # only if the transcript, lower case and letters only, matches
+  # wake_word_pattern; a negative sample only if it does not. Positive
+  # samples of voices with double_check must also pass the multilingual
+  # model transcribing German: the English model alone lets through many
+  # garbled samples of the German voices ("P.I.V.", "K.I.V.").
+  check:
+    mlx_model: mlx-community/whisper-base.en-mlx
+    model: base.en
+    second_mlx_model: mlx-community/whisper-small-mlx
+    second_model: small
+    second_language: de
+    wake_word_pattern: "^(hey|hay|hei|ey)(ivy|ivey|ivie|ivi|ivee|iv|aivi|eivi|ayvi)$"
+  positive:
+    count: 12000
+    # espeak's German "Hey" (hˈaɪ) sounds like "Hi", and a glottal stop (ʔ)
+    # comes out as "t" ("Hey Tyvee"), so neither is used.
+    phrases:
+      - hˈeɪ ˈaɪvi        # "Hey Ivy"
+      - hˈeɪ ˈaɪviː
+      - hˈɛɪ ˈaɪviː       # German-style "Hey"
+      - hˈɛɪ ˈaɪvi
+      - hˈeː ˈaɪviː
+      - hˈeɪ, ˈaɪvi       # with a short pause
+  negative:
+    count: 6000
+    # Confusable phrases the model must ignore. "Aivi" alone is left out on
+    # purpose: negatives this close lower the recall. The model sees the
+    # last 1.5 s, so the start of a longer phrase ("Hey, wie ...") also
+    # needs its own entry.
+    phrases:
+      - hˈɛɪ, viː                   # Hey, wie ...
+      - hˈaɪ viː                    # Hei wie ...
+      - ˈaɪ viː                     # Ei wie ...
+      - hˈɛɪ, viː ɡˈeːts            # Hey, wie geht's?
+      - hˈɛɪ, viː ʃpˈɛːt ɪst ɛs     # Hey, wie spät ist es?
+      - hˈɛɪ, viːɾ ɡˈeːən           # Hey, wir gehen
+      - ˈaɪ, viː ʃˈøːn              # Ei, wie schön
+      - ˈaɪvaɪs                     # Eiweiß
+      - hˈɛɪ ˈeːviː                 # Hey Evi
+      - hˈɛɪ kˈiːviː                # Hey Kiwi
+      - hˈɛɪ ˈiːvoː                 # Hey Ivo
+      - hˈɑvaɪˌiː                   # Hawaii
+      - hˈaɪdiː                     # Heidi
+      - hˈɛɪ zˈiːriː                # Hey Siri
+      - hˈɛɪ ɡˈuːɡəl                # Hey Google
+      - hˈɛɪ duː                    # Hey du
+      - hˈɛɪ lˈɔøtə                 # Hey Leute
+      - hˈɛɪ                        # Hey
+      - hˈeɪ ˈɛvi                   # Hey Evie
+      - hˈeɪ, wiː                   # Hey, we
+      - hˈaɪ, aɪv                   # Hi, I've
+      - hˈeɪ, aɪv                   # Hey, I've
+      - hˈeɪ, ˈaɪ                   # Hey, I
+      - aɪv bˌɪn                    # I've been
+      - hˈaɪ fˈaɪv                  # high five
+
+# Own recordings, see docs/wake_word_training.md.
+recordings:
+  # A satellite stream starts right after "Okay Nabu"; its first moments can
+  # still hold the end of the trigger phrase.
+  skip_start_s: 0.6
+  segment:
+    vad_mode: 2
+    frame_ms: 30
+    # Closes the pause in "Hey, AIVI".
+    merge_gap_s: 0.4
+    # Only the part of a voice activity run at most trim_db below its
+    # loudest 10 ms counts, so reverberation, music or noise after the
+    # phrase does not stretch the clip.
+    trim_db: 25
+    padding_s: 0.15
+    # The model looks at the last 3.0 s, so a phrase with some
+    # reverberation still fits.
+    min_duration_s: 0.4
+    max_duration_s: 2.2
+    # Segments more than noise_gap_db below the loud segments of their
+    # recording are background sounds, not the speaker.
+    noise_gap_db: 20
+    # Segments this close to the start or end of a recording may be cut
+    # off.
+    edge_s: 0.15
+  # Whisper must hear "Hey" followed by an "i", "ai" or "e" sound in a wake
+  # word clip (letters only, lower case). It knows no German "Ei-wi" and
+  # writes "Hey, I.B.", "Hey, I mean" or "Here, Ivy" instead. Clips that do
+  # not match go to clips/real_positive/review/ for a listen.
+  wake_word_pattern: "^(hey|hei|hay|ey|he|here)(i|ai|ei|a|e)"
+  # Stable split per clip: the test part is never trained on.
+  split:
+    train: 0.7
+    validation: 0.1
+    test: 0.2
+  # Long negative recordings are cut into chunks; the last part of every
+  # recording is held back to measure false accepts per hour.
+  negative_chunk_s: 10
+  negative_test_fraction: 0.25
+
+augmentation:
+  duration_s: 3.2
+  jitter_s: [0.195, 0.205]
+  background_snr_db: [-5, 10]
+  probabilities:
+    SevenBandParametricEQ: 0.1
+    TanhDistortion: 0.1
+    PitchShift: 0.1
+    BandStopFilter: 0.1
+    AddColorNoise: 0.1
+    AddBackgroundNoise: 0.75
+    Gain: 1.0
+    RIR: 0.5
+
+features:
+  # How often each clip enters the training features, each time augmented
+  # differently. Real recordings are few, so they are repeated most.
+  repetitions:
+    tts_positive: 2
+    tts_negative: 2
+    real_positive: 15
+  # sampling_weight: how often a set is drawn into a batch.
+  # penalty_weight: how much a mistake on the set costs.
+  # With few real clips each one comes up thousands of times. At weight 3.0
+  # the model heard the first 49 clips of one speaker so often that it also
+  # woke on other speech (DiPCo 0.56 false accepts per hour at cutoff 0.99);
+  # at 1.5 it still caught all held-out clips of that speaker with none.
+  sets:
+    tts_positive: {truth: true, sampling_weight: 2.0, penalty_weight: 1.0}
+    real_positive: {truth: true, sampling_weight: 1.5, penalty_weight: 1.0}
+    tts_negative: {truth: false, sampling_weight: 3.0, penalty_weight: 1.0}
+    real_negative: {truth: false, sampling_weight: 3.0, penalty_weight: 1.0}
+    speech: {truth: false, sampling_weight: 10.0, penalty_weight: 1.0}
+    dinner_party: {truth: false, sampling_weight: 10.0, penalty_weight: 1.0}
+    no_speech: {truth: false, sampling_weight: 5.0, penalty_weight: 1.0}
+    german_speech: {truth: false, sampling_weight: 10.0, penalty_weight: 1.0}
+    dinner_party_eval: {truth: false, sampling_weight: 0.0, penalty_weight: 1.0}
+
+training:
+  # Lists hold one value per training phase.
+  steps: [20000, 10000]
+  learning_rates: [0.001, 0.0002]
+  positive_class_weight: [1, 1]
+  negative_class_weight: [20, 20]
+  time_mask_max_size: [5, 0]
+  time_mask_count: [2, 0]
+  freq_mask_max_size: [5, 0]
+  freq_mask_count: [2, 0]
+  batch_size: 128
+  eval_step_interval: 500
+  clip_duration_ms: 1500
+  target_minimization: 0.9
+  minimization_metric: null
+  maximization_metric: average_viable_recall
+  # Same architecture as okay_nabu.
+  model:
+    - mixednet
+    - --pointwise_filters=64,64,64,64
+    - --repeat_in_block=1,1,1,1
+    - --mixconv_kernel_sizes=[5],[7,11],[9,15],[23]
+    - --residual_connection=0,0,0,0
+    - --first_conv_filters=32
+    - --first_conv_kernel_size=5
+    - --stride=3
+
+evaluation:
+  # Detections as on the device: mean over the last sliding_window_size
+  # probabilities, then a pause before the next detection counts.
+  cooldown_s: 1.0
+  # Held-out recordings play after this much of a household recording, as
+  # the satellite never hears a wake word out of silence.
+  lead_in_s: 1.0
+  # The recommended cutoff keeps false accepts on held-out household audio
+  # at or below this rate.
+  max_false_accepts_per_hour: 0.1
+
+manifest:
+  sliding_window_size: 5
+  feature_step_size: 10
+  # okay_nabu, same architecture, needs 37000 bytes.
+  tensor_arena_size: 37000
+  minimum_esphome_version: "2024.7.0"
+  author: ha-voice-agent contributors
+  website: https://github.com/Pucciano/ha-voice-agent
