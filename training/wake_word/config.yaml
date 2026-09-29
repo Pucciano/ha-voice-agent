@@ -235,9 +235,13 @@ features:
     real_positive: 15
   # sampling_weight: how often a set is drawn into a batch.
   # penalty_weight: how much a mistake on the set costs.
+  # With few real clips each one comes up thousands of times. At weight 3.0
+  # the model heard the first 49 clips of one speaker so often that it also
+  # woke on other speech (DiPCo 0.56 false accepts per hour at cutoff 0.99);
+  # at 1.5 it still caught all held-out clips of that speaker with none.
   sets:
     tts_positive: {truth: true, sampling_weight: 2.0, penalty_weight: 1.0}
-    real_positive: {truth: true, sampling_weight: 3.0, penalty_weight: 1.0}
+    real_positive: {truth: true, sampling_weight: 1.5, penalty_weight: 1.0}
     tts_negative: {truth: false, sampling_weight: 3.0, penalty_weight: 1.0}
     real_negative: {truth: false, sampling_weight: 3.0, penalty_weight: 1.0}
     speech: {truth: false, sampling_weight: 10.0, penalty_weight: 1.0}
