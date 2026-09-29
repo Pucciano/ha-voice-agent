@@ -59,6 +59,9 @@ Room identifiers are English. File and node names use hyphens
 2. Change `name`, `friendly_name` and the secret name `<room>_api_key`.
 3. Add the key to `esphome/secrets.yaml`. Generate it with
    `openssl rand -base64 32`. Never reuse a key from another satellite.
+4. Copy `esphome/aivi-sat-living-room-diagnostics.yaml` to
+   `esphome/aivi-sat-<room>-diagnostics.yaml` and point its `device` include at
+   the new file. This is the diagnostic build of the same device.
 
 The API key also encrypts OTA updates, so there is no separate OTA password.
 
@@ -169,6 +172,70 @@ Updates go over the network with encrypted OTA:
 make sat-flash SAT=<room> DEVICE=<ip-address>
 ```
 
+## Diagnostic firmware
+
+Use it when a satellite hears nothing: `Pegel Kanal 0` and `Pegel Kanal 1` stay
+at `-inf` (digital silence) and "Okay Nabu" does nothing. It is the regular
+firmware plus `esphome/packages/aivi-xvf3800-diagnostics.yaml`, which looks
+inside the XVF3800 and can repair its flash. Flash it over the network; the
+log follows right after the upload:
+
+```bash
+make sat-diag SAT=<room> DEVICE=<ip-address>
+```
+
+The package adds diagnostic entities named `Diagnose …`. Read and press them
+on the device page in Home Assistant. Every probe also appears in the log, one
+XMOS servicer every 400 ms:
+
+```text
+probe dfu_version   240/88  status=0x00 tries=1  data=01 00 07
+probe aec_spenergy   33/80  status=0x40 tries=30 data=00 00 …
+```
+
+How to read it:
+
+- `Diagnose Dienste` lists the status of each servicer. `00` means it answered.
+  `dfu_version`, `gpo_values` and `app_version` run on the control tile of the
+  XVF3800. The `aec_*`, `am_*` and `pp_*` servicers run on the audio tile. If
+  they stay at `40` (retry) or `44` (queue full) after 30 tries, the audio
+  pipeline is not running, and the XVF3800 sends only zeros.
+- `Diagnose Pins` shows the pulls and the share of high samples on each line.
+  BCLK and LRCLK read about half high while the clock runs. GPIO43, the data
+  from the XVF3800, has a pull-up, so `high=0` means the XVF3800 drives zeros.
+  A broken solder joint on D6 would read high.
+- `Diagnose Sprachenergie`, `Diagnose Mikrofon-Gain`, `Diagnose AGC-Gain` and
+  `Diagnose DSP-Leerlauf` show values only while the audio servicers answer.
+  Speech energy rises above zero while someone speaks.
+- `Diagnose Ausgang links Quelle` routes the left output (ESP32 channel 0) to a
+  raw microphone. If `Pegel Kanal 0` then moves with sound, the microphone and
+  the data line work.
+
+Repairs, in this order:
+
+1. `Diagnose XVF3800 Neustart` reboots only the XVF3800.
+2. `Diagnose XVF3800 Konfiguration löschen` removes parameters saved in the
+   XVF3800 flash and reboots it. The satellite saves none, so nothing is lost.
+3. `Diagnose XVF3800 Firmware flashen` writes the pinned image 1.0.7 into the
+   DFU upgrade slot over I2C. It takes about 4.5 minutes; keep the power on.
+   The log shows the progress and ends with `Update complete`. If it breaks
+   off, the XVF3800 starts the factory USB firmware at the next power-up;
+   repeat step 2 of the per-board steps to get it back.
+4. `Diagnose GPIO9 und GPIO44 hochohmig`, then a reboot of the XVF3800, rules
+   out the ESP32. GPIO9 is the MCLK line and GPIO44 carries data to the
+   XVF3800.
+
+If the audio servicers still do not answer after these steps, suspect a
+hardware defect of the XVF3800 board.
+
+The package embeds the XVF3800 image (889 KB). The component flashes it at boot
+only when the board reports a different version. Go back to the regular
+firmware afterwards:
+
+```bash
+make sat-flash SAT=<room> DEVICE=<ip-address>
+```
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -178,3 +245,4 @@ make sat-flash SAT=<room> DEVICE=<ip-address>
 | One `Authentication Failed` right after a USB reset, then connected | The access point still held the old association | None; clean reboots connect at the first attempt |
 | `aivi-sat-<room>.local` does not resolve | mDNS does not cross VLANs | Use the IP address |
 | No `/dev/cu.usbmodem*` | Charge-only cable or no bootloader | Use a data cable; hold BOOT while plugging in |
+| `Pegel Kanal 0` and `1` at `-inf`, no wake word | XVF3800 audio pipeline not running | [Diagnostic firmware](#diagnostic-firmware) |
