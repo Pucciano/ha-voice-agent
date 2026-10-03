@@ -1,4 +1,5 @@
 .PHONY: dev-up dev-up-debug dev-down prod-up prod-down lint format test eval \
+	stt-capture-test \
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
 	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-import \
 	ww-features ww-train ww-evaluate
@@ -33,13 +34,18 @@ prod-down:
 	docker compose -f compose/prod/docker-compose.yml down
 
 lint:
-	pylint --rcfile=.pylintrc services/llm_proxy/app training/eval training/llm training/stt training/wake_word scripts/*.py
+	pylint --rcfile=.pylintrc services/llm_proxy/app services/stt_capture/app training/eval training/llm training/stt training/wake_word scripts/*.py
 
 format:
-	black --line-length 80 services/llm_proxy/app training/eval training/llm training/stt training/wake_word scripts/*.py
+	black --line-length 80 services/llm_proxy/app services/stt_capture/app tests/stt_capture training/eval training/llm training/stt training/wake_word scripts/*.py
 
 test:
-	python -m compileall -q -x '/\.venv/' services/llm_proxy/app training/eval training/llm training/stt training/wake_word scripts
+	python -m compileall -q -x '/\.venv/' services/llm_proxy/app services/stt_capture/app training/eval training/llm training/stt training/wake_word scripts
+
+# Request capture relay (services/stt_capture); standard library only, so
+# pytest is the only extra.
+stt-capture-test:
+	uvx --python 3.12 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/stt_capture
 
 eval:
 	python training/eval/eval_tool_call_validity.py --dataset dev/datasets/llm
