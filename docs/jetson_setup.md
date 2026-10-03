@@ -2,11 +2,12 @@
 
 This runbook turns a classic Jetson Nano Developer Kit (4 GB, microSD) into
 the speech server of plan phase 4. It runs two Wyoming services for Home
-Assistant:
+Assistant, plus a relay that can store requests for training:
 
 | Service | Purpose | Port |
 |---|---|---:|
-| Speech-to-Phrase | speech to text | 10300 |
+| stt-capture | relays speech to text to Speech-to-Phrase; stores requests on a USB drive while a satellite allows it ([section 9](#9-request-capture)) | 10300 |
+| Speech-to-Phrase | speech to text | internal |
 | Piper (`de_DE-thorsten-medium`) | text to speech | 10200 |
 | Whisper (`base-int8`, on demand) | speech to text, comparison only | 10301 |
 
@@ -76,6 +77,8 @@ card is enough; use a high-endurance card.
 - installs Docker Compose v2.29.7 and adds `aivi` to the `docker` group
 - creates `/srv/wyoming` and `/opt/aivi/compose`, and copies the compose file
   and its `custom_sentences/` there
+- builds the `stt-capture` image, installs `aivi-capture` and creates the
+  empty mount point of the capture drive ([section 9](#9-request-capture))
 - installs `aivi-logmode` and sets it to dev
 
 NVIDIA's list of desktop-only packages is not used on purpose: on this image it
@@ -90,7 +93,7 @@ ssh aivi@192.168.55.1 mkdir -p /tmp/aivi-provision
 ```
 
 ```bash
-scp -r scripts/jetson_provision.sh scripts/jetson_logmode.sh compose/jetson/docker-compose.yml compose/jetson/custom_sentences aivi@192.168.55.1:/tmp/aivi-provision/
+scp -r scripts/jetson_provision.sh scripts/jetson_logmode.sh scripts/jetson_capture.sh compose/jetson/docker-compose.yml compose/jetson/custom_sentences services/stt_capture aivi@192.168.55.1:/tmp/aivi-provision/
 ```
 
 ```bash
@@ -237,6 +240,183 @@ ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d --force-recre
 
 Training takes about 11 s. Requests in that time return an empty text.
 
+## 9. Request capture
+
+The `stt-capture` relay can store real voice requests as raw data for
+improving speech recognition: the audio that Speech-to-Phrase received and
+the text it recognised. Every satellite has a switch `Anfragen aufzeichnen` in
+Home Assistant. It is off after every restart of the satellite.
+
+### How it works
+
+Home Assistant connects to port 10300 as before. The relay passes every
+Wyoming frame byte for byte to Speech-to-Phrase and back, and only watches a
+copy. A request carries no satellite id, so the relay asks Home Assistant
+which satellite is listening. It stores a request only if all of these hold:
+
+- exactly one of the satellites in the compose file (`--satellite`) is
+  `listening` at `audio-start`, or else at `audio-stop` (one more attempt)
+- that satellite's switch is `on`
+- both answers arrived before the request ended, within 2 s in total
+- the audio kept one format and stayed under 60 s
+- the capture drive is mounted, carries its marker file and has at least
+  1 GiB free
+
+Anything else discards the audio, which never touches the SD card. Speech
+recognition does not wait for any of this. Empty results, errors and broken
+connections are stored too, with their `capture_outcome`; they are the most
+useful samples for review.
+
+Each request becomes one directory on the drive, in the layout of
+`training/stt/prepare_dataset.py`:
+
+```text
+/mnt/aivi-capture/drive/aivi-stt/20261003T194312Z-living_room-1a2b3c/
+  audio.wav        16 kHz, 16 bit, mono, as Home Assistant sent it
+  transcript.txt   the text of Speech-to-Phrase (a pseudo label)
+  metadata.json    satellite, outcome, format, levels, SHA-256, model, latency
+```
+
+Speech-to-Phrase picks from known sentences, so its text is not ground truth.
+Samples start as `verified: false`, and `prepare_dataset.py` leaves them out
+until they are reviewed.
+
+While the switch is on, everything said after the wake word is stored
+unencrypted on the drive. Tell the household, and switch it off when the
+recording period is over.
+
+### Prepare the drive
+
+The drive is formatted as ext4 on the Jetson and mounted by its UUID, so the
+Mac cannot read it directly; fetch the data over the network instead. Find
+the drive with `lsblk -o NAME,SIZE,TRAN,MODEL`, then format it. This erases
+it; you type the device name to confirm:
+
+```bash
+ssh -t aivi@<jetson-ip> sudo aivi-capture format /dev/sda
+```
+
+```bash
+ssh -t aivi@<jetson-ip> sudo aivi-capture setup
+```
+
+`setup` refuses to run unless the root mount propagates mounts (`shared`).
+It adds an fstab entry, a udev rule that mounts the drive when it is plugged
+in, the marker file `.aivi-capture-volume` and the `aivi-stt/` directory.
+Without the drive, `/mnt/aivi-capture/drive` is an empty, immutable
+directory on the SD card. Check the state at any time:
+
+```bash
+ssh aivi@<jetson-ip> aivi-capture status
+```
+
+Unmount before unplugging the drive, and mount it again after plugging it
+back in if udev has not done so already:
+
+```bash
+ssh -t aivi@<jetson-ip> sudo aivi-capture eject
+```
+
+```bash
+ssh -t aivi@<jetson-ip> sudo aivi-capture mount
+```
+
+### Install or update the relay
+
+Provisioning builds the image. To add the relay to a running Jetson, or to
+update it, copy the files and build the image:
+
+```bash
+ssh aivi@<jetson-ip> 'rm -rf /tmp/aivi-update && mkdir /tmp/aivi-update'
+```
+
+```bash
+scp -r compose/jetson/docker-compose.yml scripts/jetson_capture.sh services/stt_capture aivi@<jetson-ip>:/tmp/aivi-update/
+```
+
+```bash
+ssh aivi@<jetson-ip> 'docker build -t aivi/stt-capture:0.1.0 /tmp/aivi-update/stt_capture'
+```
+
+The first time, try the relay on a spare port while Speech-to-Phrase still
+serves port 10300 (`aivi-capture prepare` creates the mount point if
+provisioning has not):
+
+```bash
+ssh -t aivi@<jetson-ip> 'sudo install -m 0755 /tmp/aivi-update/jetson_capture.sh /usr/local/sbin/aivi-capture && sudo aivi-capture prepare'
+```
+
+```bash
+ssh aivi@<jetson-ip> 'docker run --rm -d --name stt-capture-trial --network aivi-jetson_default -p 10310:10300 -v /mnt/aivi-capture:/capture:rslave aivi/stt-capture:0.1.0 --upstream tcp://speech-to-phrase:10300'
+```
+
+```bash
+uvx --from wyoming==1.10.2 python scripts/wyoming_smoke_test.py stt --host <jetson-ip> --port 10310 --wav test.wav
+```
+
+```bash
+ssh aivi@<jetson-ip> docker stop stt-capture-trial
+```
+
+Then install the compose file, keeping the old one, and start the stack:
+
+```bash
+ssh -t aivi@<jetson-ip> 'sudo sh -c "install -m 0755 /tmp/aivi-update/jetson_capture.sh /usr/local/sbin/aivi-capture && cp -p /opt/aivi/compose/docker-compose.yml /opt/aivi/compose/docker-compose.yml.bak && install -m 0644 /tmp/aivi-update/docker-compose.yml /opt/aivi/compose/docker-compose.yml"'
+```
+
+```bash
+ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d'
+```
+
+Speech-to-Phrase is recreated and trains again. Its health check only shows
+that it answers Wyoming requests: during training it already answers, with
+empty transcripts. Readiness is a real request through the relay, which must
+return the recognised text ([section 6](#6-verify)):
+
+```bash
+uvx --from wyoming==1.10.2 python scripts/wyoming_smoke_test.py stt --host <jetson-ip> --port 10300 --wav test.wav
+```
+
+To roll back, restore the old compose file:
+
+```bash
+ssh -t aivi@<jetson-ip> 'sudo cp -p /opt/aivi/compose/docker-compose.yml.bak /opt/aivi/compose/docker-compose.yml'
+```
+
+```bash
+ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d --remove-orphans'
+```
+
+### Satellites
+
+Each satellite that may be captured has a `--satellite` line in the compose
+file: its `satellite_id`, its `assist_satellite` entity and its
+`Anfragen aufzeichnen` switch, as Home Assistant names them. Take both
+entity IDs from the satellite's device page, install the compose file and run
+`docker compose up -d`. A satellite without such a line is never captured.
+
+### Fetch and review the data
+
+Fetch new samples to the Mac. `--ignore-existing` keeps samples you have
+already reviewed there:
+
+```bash
+rsync -av --ignore-existing --exclude '.tmp-*' aivi@<jetson-ip>:/mnt/aivi-capture/drive/aivi-stt/ dev/datasets/stt/
+```
+
+To review a sample, listen to `audio.wav` and write what was actually said
+into `transcript.txt`. Then set `"verified": true`, `"label_source":
+"manual"` and `"verified_at"` (ISO time) in `metadata.json`. Keep
+`pseudo_transcript`: the difference between it and the reviewed text is what
+the recogniser got wrong. Leave samples without intelligible speech
+unverified. Only verified samples reach the manifest:
+
+```bash
+python training/stt/prepare_dataset.py --input-dir dev/datasets/stt --output dev/datasets/meta/stt_manifest.jsonl
+```
+
+`--include-unverified` adds the rest, for review or evaluation only.
+
 ## Logging
 
 `aivi-logmode` switches between two modes:
@@ -245,7 +425,10 @@ Training takes about 11 s. Requests in that time return an empty text.
   written to the card.
 - **dev:** journald on the card (at most 256 MB) and container logs of 3 × 10 MB.
 
-rsyslog is off in both modes.
+rsyslog is off in both modes. In dev mode, `docker compose logs stt-capture`
+shows one line per request: the outcome and whether it was stored, or why
+not (`not_enabled`, `no_listening_satellite`, `no_marker`, …). Transcripts
+never appear in a log.
 
 ```bash
 ssh -t aivi@192.168.55.1 sudo aivi-logmode prod
@@ -274,3 +457,7 @@ ssh -t aivi@192.168.55.1 sudo rm -rf /var/log/journal
 | New containers fail with `Operation not permitted` on thread start | Docker 20.10.7 from the SD image blocks `clone3` | Provision; the update brings Docker 20.10.21 |
 | `curl: command not found` | The SD card image has no curl | Provision installs it |
 | No `/dev/cu.usbmodem…` after boot | Charge-only cable, or setup already done | Use a data cable; after setup use SSH instead |
+| Switch `Anfragen aufzeichnen` on, but no samples | Drive not mounted, or the request was refused | `aivi-capture status`; in dev mode the relay log names the reason ([section 9](#9-request-capture)) |
+| Relay log `reason=ha_error` | Token in `.env` invalid, or an entity ID in `--satellite` does not exist | Check the entity IDs on the satellite's device page; renew the token ([section 4](#4-home-assistant-token)) |
+| No speech recognition after installing the relay | `stt-capture` not running, e.g. image not built | `docker compose ps`; build the image or roll back ([section 9](#9-request-capture)) |
+| Drive plugged in, `aivi-capture status` says not mounted | Plugged in after an eject, or udev missed it | `sudo aivi-capture mount` |
