@@ -91,6 +91,9 @@ compose/
   dev/docker-compose.yml           development stack (adds llm_proxy)
   dev/docker-compose.override.yml  debug capture and packet inspection
   dev/vllm.config.yaml             vLLM engine configuration for dev
+  jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper)
+config/homeassistant/              Home Assistant automations (answer routing)
+esphome/                           satellite firmware: device files and packages
 services/
   llm_proxy/                       FastAPI proxy with tool-call repair
   stt_faster_whisper/              custom Whisper container build
@@ -99,6 +102,7 @@ training/
   eval/                            evaluation scripts (validity, latency, compliance)
   llm/                             LoRA fine-tuning and dataset preparation
   stt/                             STT dataset preparation and evaluation
+  wake_word/                       "Hey AIVI" wake word training (microWakeWord)
 docs/                              setup guides and pipeline documentation
 dev/
   models/{llm,tts}                 local model storage for development
@@ -216,6 +220,11 @@ python training/eval/eval_two_step_compliance.py --dataset dev/datasets/llm
 python training/eval/eval_latency_tokens.py --dataset dev/datasets/llm
 ```
 
+The custom wake word "Hey AIVI" is trained separately, locally on Apple
+Silicon with microWakeWord, from synthetic samples and recordings made
+through the satellite. The `ww-*` Makefile targets run the steps, and
+`docs/wake_word_training.md` is the runbook.
+
 ## Documentation
 
 Further setup and operational guides live in the `docs/` directory:
@@ -226,6 +235,8 @@ Further setup and operational guides live in the `docs/` directory:
   the llm_proxy.
 - `docs/training_pipeline.md` details dataset schemas, the capture-to-training
   workflow, and evaluation metrics.
+- `docs/wake_word_training.md` trains the custom "Hey AIVI" wake word with
+  microWakeWord, from synthetic samples and household recordings.
 - `docs/satellite_flashing.md` is the per-room runbook for flashing a
   satellite board (XVF3800 firmware, ESP32, verification).
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
@@ -244,6 +255,14 @@ make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU
 make sat-chip DEVICE=/dev/cu.usbmodemXXXX           # identify the ESP32
 make sat-flash SAT=living-room DEVICE=<port-or-ip>   # build and flash
 make sat-logs SAT=living-room DEVICE=<port-or-ip>    # follow the log
+make ww-setup         # wake word: pinned tools, generators and datasets
+make ww-preview       # a few checked samples per pronunciation and voice
+make ww-samples       # synthetic wake word and confusable samples
+make ww-record HOST=<satellite-ip> SPEAKER=<name>   # record through the satellite
+make ww-import        # cut the recordings into clips
+make ww-features      # augmented spectrograms for training
+make ww-train         # train the quantized streaming model
+make ww-evaluate      # recall, false accepts and suggested cutoffs
 ```
 
 ## Branch workflow
