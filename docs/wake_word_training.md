@@ -325,6 +325,26 @@ on DiPCo. Each must also keep household false accepts at or below 0.1 per
 hour. The manifest `hey_aivi.json` next to the model takes the cutoff for
 "Wenig empfindlich".
 
+## 9. Put the model on the satellite
+
+The training data includes material licensed for non-commercial use only, so
+the model stays out of the public repository. Copy it into the gitignored
+`esphome/models/` folder before building the satellite firmware:
+
+```bash
+mkdir -p esphome/models
+cp dev/models/wake_word/hey_aivi/<run>/hey_aivi.{json,tflite} esphome/models/
+make sat-flash SAT=<room> DEVICE=<ip-address>
+```
+
+The build fails without these files. The firmware runs "Hey AIVI" next to
+"Okay Nabu". Set the new cutoffs for "Hey AIVI" in the
+`Wake-Word-Empfindlichkeit` select in `esphome/packages/aivi-voice-input.yaml`.
+The satellite's `Wake Word` select in Home Assistant chooses `Okay Nabu`,
+`Hey AIVI` or `Beide`. Home Assistant's own `Aktivierungswort` select stays
+unavailable: Home Assistant fills it only for satellites that play
+announcements. Disable it on the device page to avoid confusion.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
