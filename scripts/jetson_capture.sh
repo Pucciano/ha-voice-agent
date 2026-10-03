@@ -89,9 +89,17 @@ cmd_format() {
   echo "Formatted ${part} as ext4 (${LABEL}). Next: sudo aivi-capture setup"
 }
 
+# Propagation of the mount that holds PARENT; before PARENT exists, that of
+# its parent directory, which is on the same mount.
+propagation() {
+  local target=${PARENT}
+  [[ -d ${target} ]] || target=${PARENT%/*}
+  findmnt -no PROPAGATION --target "${target}" 2>/dev/null || echo unknown
+}
+
 check_propagation() {
   local propagation
-  propagation=$(findmnt -no PROPAGATION --target "${PARENT}")
+  propagation=$(propagation)
   [[ ${propagation} == shared* ]] || die "The mount holding ${PARENT} has \
 propagation '${propagation}', not shared: a drive mounted later would never \
 reach the container."
@@ -195,7 +203,7 @@ cmd_eject() {
 }
 
 cmd_status() {
-  echo "propagation: $(findmnt -no PROPAGATION --target "${PARENT}" 2>/dev/null || echo unknown)"
+  echo "propagation: $(propagation)"
   if ! mountpoint -q "${MOUNT_POINT}" 2>/dev/null; then
     local flags=""
     [[ -d ${MOUNT_POINT} ]] && flags=$(lsattr -d "${MOUNT_POINT}" 2>/dev/null | awk '{print $1}')
