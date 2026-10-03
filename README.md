@@ -91,11 +91,12 @@ compose/
   dev/docker-compose.yml           development stack (adds llm_proxy)
   dev/docker-compose.override.yml  debug capture and packet inspection
   dev/vllm.config.yaml             vLLM engine configuration for dev
-  jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper)
+  jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper, capture relay)
 config/homeassistant/              Home Assistant automations (answer routing)
 esphome/                           satellite firmware: device files and packages
 services/
   llm_proxy/                       FastAPI proxy with tool-call repair
+  stt_capture/                     Wyoming relay that stores voice requests for STT training
   stt_faster_whisper/              custom Whisper container build
 scripts/                           model download, health checks, smoke tests
 training/
@@ -240,7 +241,8 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/satellite_flashing.md` is the per-room runbook for flashing a
   satellite board (XVF3800 firmware, ESP32, verification).
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
-  (Speech-to-Phrase and Piper over Wyoming) for the first test phase.
+  (Speech-to-Phrase and Piper over Wyoming) for the first test phase, and
+  the capture of voice requests for STT training.
 
 ## Makefile helpers
 

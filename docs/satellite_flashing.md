@@ -114,6 +114,9 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   `esphome.aivi_stt_text` ("wie spät ist es") and `esphome.aivi_tts_uri` (an
   absolute `http://…/api/tts_proxy/….mp3` URL), each with the `satellite_id`.
 - Switch on `Mikrofon stumm`. The ring turns red and "Okay Nabu" does nothing.
+- `Anfragen aufzeichnen` is off after every boot. While it is on, the Jetson
+  stores every request of this satellite on its USB drive, if the satellite
+  is listed there ([Jetson runbook, section 9](jetson_setup.md#9-request-capture)).
 
 Each detection logs `Detected 'Okay Nabu' with sliding average probability is
 … and max probability is …`. The average is taken at the moment it crosses the
