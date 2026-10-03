@@ -65,6 +65,9 @@ esphome:
         - sensor.template.publish:
             id: wake_word_count
             state: 0
+        # ESPHome enables only the first wake word by default; the select
+        # below decides which models run.
+        - script.execute: apply_wake_word_choice
         - micro_wake_word.start:
 
 micro_wake_word:
@@ -78,6 +81,11 @@ micro_wake_word:
     # Pinned release; the sensitivity cutoffs below are tuned for it.
     - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/okay_nabu_20241226.3/okay_nabu.json
       id: okay_nabu
+    # Custom "Hey AIVI" (issue #2), trained locally with `make ww-train`.
+    # The model stays out of git: copy hey_aivi.json and hey_aivi.tflite from
+    # dev/models/wake_word/hey_aivi/<run>/ to esphome/models/ before building.
+    - model: models/hey_aivi.json
+      id: hey_aivi
   vad:
     probability_cutoff: 0.05
   on_wake_word_detected:
@@ -179,7 +187,43 @@ sensor:
     state_class: total_increasing
     update_interval: never
 
+script:
+  # Enables the wake word models chosen in the "Wake Word" select.
+  - id: apply_wake_word_choice
+    then:
+      - if:
+          condition:
+            lambda: return id(wake_word_choice).current_option() != "Hey AIVI";
+          then:
+            - micro_wake_word.enable_model: okay_nabu
+          else:
+            - micro_wake_word.disable_model: okay_nabu
+      - if:
+          condition:
+            lambda: return id(wake_word_choice).current_option() != "Okay Nabu";
+          then:
+            - micro_wake_word.enable_model: hey_aivi
+          else:
+            - micro_wake_word.disable_model: hey_aivi
+
 select:
+  # Home Assistant's own wake word select needs a satellite with
+  # announcements, so this one chooses the wake word instead.
+  - platform: template
+    id: wake_word_choice
+    name: Wake Word
+    icon: mdi:account-voice
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - Okay Nabu
+      - Hey AIVI
+      - Beide
+    initial_option: Beide
+    on_value:
+      - script.execute: apply_wake_word_choice
+
   - platform: template
     id: wake_word_sensitivity
     name: Wake-Word-Empfindlichkeit
@@ -196,11 +240,16 @@ select:
       # Cutoffs for okay_nabu 20241226.3 as uint8 (probability * 255), with
       # false accepts per hour on the Dinner Party Corpus: 0.85 -> 0.000,
       # 0.69 -> 0.376, 0.56 -> 0.751 (values from the formatBCE reference).
+      # hey_aivi run real-v3-v11 needs high cutoffs: 0.98 -> 0.00, 0.97 ->
+      # 0.19, 0.96 -> 0.37 false accepts per hour on the same corpus.
       - lambda: |-
           if (x == "Wenig empfindlich") {
             id(okay_nabu).set_probability_cutoff(217);
+            id(hey_aivi).set_probability_cutoff(250);
           } else if (x == "Mittel empfindlich") {
             id(okay_nabu).set_probability_cutoff(176);
+            id(hey_aivi).set_probability_cutoff(247);
           } else {
             id(okay_nabu).set_probability_cutoff(143);
+            id(hey_aivi).set_probability_cutoff(245);
           }
