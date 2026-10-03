@@ -1,8 +1,14 @@
 # Satellite flashing
 
 This runbook brings up one AIVI satellite board: a Seeed XIAO ESP32-S3 Plus
-soldered onto a reSpeaker XVF3800. Repeat it for every room. The steps were
-verified on the living-room board (`aivi-sat-living-room`).
+mounted on a reSpeaker XVF3800. Repeat it for every room. The steps were
+verified on the living-room board (`aivi-sat-living-room`), first on hardware
+revision 1.0 and again on 1.1.
+
+| Revision | XIAO mounting | Status |
+|---|---|---|
+| 1.0 | Soldered flat onto the XVF3800 board (surface mount, board to board) | Retired: the XVF3800 failed twice, the second time for good |
+| 1.1 | Soldered onto standoff pins (pin headers) | Current |
 
 The board runs the phase 5 firmware from `esphome/`. "Okay Nabu" is detected on
 the device and starts the Home Assistant pipeline `AIVI Lokal Deutsch`. The
@@ -26,7 +32,9 @@ address. Give each satellite a DHCP reservation for its MAC address.
 
 ### 1. Check the hardware
 
+Mount the XIAO on standoff pins, not flat onto the board (revision 1.1).
 Before the first power-up, measure `5V`↔`GND` and `3V3`↔`GND` for shorts.
+On the living-room board `5V`↔`GND` read about 285 Ω in circuit.
 Attach the U.FL antenna to the XIAO. The XIAO has no PCB antenna. Without the
 external antenna the first board saw its access point at -96 dBm and could not
 connect.
@@ -171,6 +179,21 @@ Updates go over the network with encrypted OTA:
 ```bash
 make sat-flash SAT=<room> DEVICE=<ip-address>
 ```
+
+### 8. Replace a board
+
+A replacement board for a room keeps the room's device file and API key, so
+Home Assistant keeps the device, its entities and the router entry:
+
+1. Unplug the old board for good. It runs under the same name and key.
+2. Run steps 1, 2 and 4 on the new board, with the same `SAT=<room>`.
+3. Move the room's DHCP reservation to the new MAC address and restart the
+   satellite.
+4. In Home Assistant, open the satellite's ESPHome entry, choose
+   `Reconfigure` and enter the new IP address. Home Assistant reports the same
+   name with a new MAC address. Choose `Migrate configuration to new device`.
+   The device ID stays the same, so `AIVI Antwort-Routing` needs no change.
+5. Run the checks from step 5.
 
 ## Diagnostic firmware
 
