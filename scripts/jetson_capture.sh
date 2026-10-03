@@ -81,6 +81,9 @@ cmd_format() {
     sleep 0.5
   done
   [[ -n ${part} && -b ${part} ]] || die "The new partition did not appear."
+  # The new partition can start where an old file system did; remove its
+  # signatures so nothing but ext4 is detected.
+  wipefs --all "${part}" >/dev/null
   mkfs.ext4 -F -q -L "${LABEL}" -m 0 "${part}"
   udevadm settle
   echo "Formatted ${part} as ext4 (${LABEL}). Next: sudo aivi-capture setup"
