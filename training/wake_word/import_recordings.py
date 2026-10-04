@@ -13,10 +13,18 @@ sound. Clips that fail go to clips/real_positive/review/ instead of the
 training: listen to them and list the good ones in recordings/accepted.txt.
 Clip names in recordings/excluded.txt are dropped for good. clips.csv lists
 every segment with its level, transcripts and verdict.
+
+Takes recorded through Home Assistant have a JSON sidecar that lists the
+satellite's wake word detections. In negative recordings the window around
+each "Hey AIVI" detection is cut out, because someone may have said the wake
+word, and saved to clips/real_negative/review/. A window that turns out to be
+a false accept goes back into the training when its clip name is listed in
+recordings/negative_keep.txt.
 """
 
 import argparse
 import csv
+import json
 import logging
 from pathlib import Path
 
@@ -76,12 +84,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def audio_files(directory: Path) -> list[Path]:
-    """Audio files below a directory, sorted."""
+    """Audio files below a directory, sorted.
+
+    Hidden files and directories are skipped, for example the ._ files that
+    macOS writes next to audio files on some drives.
+    """
 
     return sorted(
         path
         for path in directory.rglob("*")
-        if path.is_file() and path.suffix.lower() in AUDIO_SUFFIXES
+        if path.is_file()
+        and path.suffix.lower() in AUDIO_SUFFIXES
+        and not any(
+            part.startswith(".") for part in path.relative_to(directory).parts
+        )
     )
 
 
@@ -298,35 +314,166 @@ def import_positive(config: dict, paths: Paths, check: SpeechCheck) -> None:
     )
 
 
+def wake_word_windows(
+    recording: Path, name: str, length: int, settings: dict
+) -> list[tuple[int, int, str]]:
+    """Sample ranges around the wake word detections in a take's sidecar.
+
+    Returns (start, end, review clip name) sorted by start; empty for
+    recordings without a sidecar, such as those from the Mac recorder.
+    """
+
+    sidecar = recording.with_suffix(".json")
+    if not sidecar.is_file():
+        return []
+    try:
+        detections = json.loads(sidecar.read_text(encoding="utf-8"))
+        detections = detections.get("detections") or []
+    except (ValueError, AttributeError):
+        _LOGGER.warning("Unreadable sidecar %s; nothing cut", sidecar.name)
+        return []
+    names = set(settings["negative_cut_wake_words"])
+    before, after = settings["negative_cut_window_s"]
+    windows = []
+    for item in detections:
+        if not isinstance(item, dict) or item.get("name") not in names:
+            continue
+        offset = item.get("offset_s")
+        if isinstance(offset, bool) or not isinstance(offset, float | int):
+            continue
+        start = max(0, int((offset - before) * SAMPLE_RATE))
+        end = min(length, int((offset + after) * SAMPLE_RATE))
+        if start < end:
+            clip = f"{name}__wake_{round(offset * 1000):08d}.wav"
+            windows.append((start, end, clip))
+    return sorted(windows)
+
+
+def outside(
+    length: int, windows: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """The parts of [0, length) not covered by the sorted windows."""
+
+    pieces = []
+    position = 0
+    for start, end in windows:
+        if start > position:
+            pieces.append((position, start))
+        position = max(position, end)
+    if position < length:
+        pieces.append((position, length))
+    return pieces
+
+
+def within(
+    pieces: list[tuple[int, int]], low: int, high: int
+) -> list[tuple[int, int]]:
+    """The pieces limited to [low, high), empty ones dropped."""
+
+    return [
+        (max(start, low), min(end, high))
+        for start, end in pieces
+        if min(end, high) > max(start, low)
+    ]
+
+
+def write_train(
+    target: Path,
+    name: str,
+    audio: np.ndarray,
+    pieces: list[tuple[int, int]],
+    chunk: int,
+) -> float:
+    """Training chunks from the pieces; returns their seconds.
+
+    A chunk never spans two pieces, so none joins the sides of a cut window.
+    """
+
+    starts = [
+        offset
+        for start, end in pieces
+        for offset in range(start, end - chunk + 1, chunk)
+    ]
+    for number, offset in enumerate(starts):
+        write_wav(
+            target / "train" / f"{name}__{number:04d}.wav",
+            audio[offset : offset + chunk],
+        )
+    return len(starts) * chunk / SAMPLE_RATE
+
+
+def write_held_out(
+    target: Path, name: str, audio: np.ndarray, pieces: list[tuple[int, int]]
+) -> float:
+    """One track per uninterrupted piece for streaming evaluation."""
+
+    for index, (start, end) in enumerate(pieces):
+        part = "" if len(pieces) == 1 else f"__part{index + 1}"
+        write_wav(target / "test" / f"{name}{part}.wav", audio[start:end])
+    return sum(end - start for start, end in pieces) / SAMPLE_RATE
+
+
+def split_negative(
+    recording: Path, source: Path, target: Path, settings: dict, keep: set
+) -> dict[str, float]:
+    """Review windows, training chunks and held-out tracks of a recording.
+
+    Returns the number of cut windows and the seconds written per kind.
+    """
+
+    audio = read_audio(recording)
+    name = recording.relative_to(source).with_suffix("").as_posix()
+    name = name.replace("/", "__")
+    windows = [
+        window
+        for window in wake_word_windows(recording, name, len(audio), settings)
+        if window[2] not in keep
+    ]
+    for start, end, clip in windows:
+        write_wav(target / "review" / clip, audio[start:end])
+    pieces = outside(len(audio), [window[:2] for window in windows])
+    cut = int(len(audio) * (1.0 - settings["negative_test_fraction"]))
+    chunk = int(settings["negative_chunk_s"] * SAMPLE_RATE)
+    return {
+        "windows": len(windows),
+        "cut": sum(end - start for start, end, _ in windows) / SAMPLE_RATE,
+        "train": write_train(
+            target, name, audio, within(pieces, 0, cut), chunk
+        ),
+        "test": write_held_out(
+            target, name, audio, within(pieces, cut, len(audio))
+        ),
+    }
+
+
 def import_negative(config: dict, paths: Paths) -> None:
     """Cut everyday recordings into training chunks and held-out tracks."""
 
     source = paths.recordings / "negative"
     target = paths.clips / "real_negative"
     reset_directory(target)
-    chunk = int(config["recordings"]["negative_chunk_s"] * SAMPLE_RATE)
-    test_fraction = config["recordings"]["negative_test_fraction"]
-    totals = {"train": 0.0, "test": 0.0}
-    recordings = audio_files(source) if source.is_dir() else []
-    for recording in recordings:
-        audio = read_audio(recording)
-        cut = int(len(audio) * (1.0 - test_fraction))
-        name = recording.relative_to(source).with_suffix("").as_posix()
-        name = name.replace("/", "__")
-        for number, start in enumerate(range(0, cut - chunk + 1, chunk)):
-            write_wav(
-                target / "train" / f"{name}__{number:04d}.wav",
-                audio[start : start + chunk],
-            )
-            totals["train"] += chunk / SAMPLE_RATE
-        # The held-out part stays one track for streaming evaluation.
-        write_wav(target / "test" / f"{name}.wav", audio[cut:])
-        totals["test"] += (len(audio) - cut) / SAMPLE_RATE
+    keep = name_list(paths.recordings / "negative_keep.txt")
+    totals = {"windows": 0.0, "cut": 0.0, "train": 0.0, "test": 0.0}
+    for recording in audio_files(source) if source.is_dir() else []:
+        result = split_negative(
+            recording, source, target, config["recordings"], keep
+        )
+        for key, value in result.items():
+            totals[key] += value
     _LOGGER.info(
         "Negative recordings: %.1f min for training, %.1f min held out",
         totals["train"] / 60,
         totals["test"] / 60,
     )
+    if totals["windows"]:
+        _LOGGER.info(
+            "Cut %d wake word windows (%.1f s) from negative recordings; "
+            "listen to them in %s and list false accepts in "
+            "recordings/negative_keep.txt",
+            totals["windows"],
+            totals["cut"],
+            (target / "review").relative_to(REPO_ROOT),
+        )
 
 
 def main() -> None:
