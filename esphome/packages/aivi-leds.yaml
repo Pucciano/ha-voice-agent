@@ -9,6 +9,9 @@
 #   wake word   two white-blue pulses
 #   listening   one blue LED points at the speaker
 #   thinking    a white-blue comet circles until the pipeline ends
+#   recording   a light circles while a wake word take runs: green for
+#               "Hey AIVI", red for everyday sound (recording_mode, set by
+#               aivi-wake-word-recording.yaml)
 #   not ready   orange blink while Wi-Fi or Home Assistant is disconnected
 #   idle        off
 # The driver skips unchanged frames, so a steady ring costs no I2C traffic.
@@ -21,6 +24,12 @@ substitutions:
   # Drop a listening or thinking phase that never ends, e.g. when Home
   # Assistant stops answering.
   led_phase_timeout_ms: "30000"
+
+globals:
+  # 0: no wake word take, 1: "Hey AIVI" take, 2: everyday take.
+  - id: recording_mode
+    type: int
+    initial_value: "0"
 
 respeaker_xvf3800:
   led_beam_sensor:
@@ -81,6 +90,18 @@ interval:
               float behind = head - i;
               if (behind < 0) behind += N;
               if (behind < 4.0f) frame[i] = rgb(64, 128, 255, 0.5f * (1.0f - behind / 4.0f));
+            }
+          } else if (id(recording_mode) != 0) {
+            // A light with a short tail, one lap every two seconds.
+            const float head = (now % 2000) * N / 2000.0f;
+            const bool positive = id(recording_mode) == 1;
+            for (int i = 0; i < N; i++) {
+              float behind = head - i;
+              if (behind < 0) behind += N;
+              if (behind < 3.0f) {
+                const float level = 1.0f - behind / 3.0f;
+                frame[i] = positive ? rgb(0, 96, 0, level) : rgb(96, 0, 0, level);
+              }
             }
           } else if (!id(wifi_id).is_connected() ||
                      !id(api_id).is_connected_with_state_subscription()) {
