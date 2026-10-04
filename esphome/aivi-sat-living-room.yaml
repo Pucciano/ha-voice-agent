@@ -15,6 +15,7 @@ packages:
   voice_input: !include packages/aivi-voice-input.yaml
   leds: !include packages/aivi-leds.yaml
   diagnostics: !include packages/aivi-diagnostics.yaml
+  wake_word_recording: !include packages/aivi-wake-word-recording.yaml
 
 # Credentials stay in this file: every satellite has its own API key, which
 # also encrypts OTA uploads, and a substitution cannot select a secret.

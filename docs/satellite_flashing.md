@@ -22,7 +22,10 @@ phases add packages.
   `Makefile`, so there is nothing to install globally.
 - `dfu-util` for the XVF3800 (`brew install dfu-util`).
 - `esphome/secrets.yaml`, created from `esphome/secrets.yaml.example`. It holds
-  the Wi-Fi credentials and one API key per satellite. The file is gitignored.
+  the Wi-Fi credentials, one API key per satellite, and the address and token
+  of the wake word recorder on the Jetson
+  ([Jetson runbook, section 10](jetson_setup.md#10-wake-word-recording)).
+  The file is gitignored.
 
 The satellites join a dedicated IoT Wi-Fi network on its own VLAN. mDNS does
 not cross VLANs, so from another network address a satellite by its IP
@@ -117,6 +120,10 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
 - `Anfragen aufzeichnen` is off after every boot. While it is on, the Jetson
   stores every request of this satellite on its USB drive, if the satellite
   is listed there ([Jetson runbook, section 9](jetson_setup.md#9-request-capture)).
+- `Wake-Word-Aufnahme Status` reads `Bereit`. A short take (set
+  `Wake-Word-Aufnahme Dauer` to 0.5 and switch `Wake-Word-Aufnahme` on) shows
+  a circling light and ends with `Gespeichert: …`, if the satellite is listed
+  on the Jetson ([wake word training, section 4](wake_word_training.md#4-record-the-household)).
 
 Each detection logs `Detected 'Okay Nabu' with sliding average probability is
 … and max probability is …`. The average is taken at the moment it crosses the
@@ -138,6 +145,8 @@ appear in the default log. Read them in Home Assistant or with any API client.
 | Two white-blue pulses | Wake word detected |
 | One blue LED | Listening; the LED points at the speaker |
 | Circling white-blue comet | Home Assistant is working on the command |
+| Circling green light | Wake word take running: "Hey AIVI" again and again |
+| Circling red light | Wake word take running: everyday sound |
 | Off | Ready, listening for the wake word |
 
 The satellite refuses follow-up questions (`continue_conversation`): every

@@ -174,8 +174,10 @@ samples:
 
 # Own recordings, see docs/wake_word_training.md.
 recordings:
-  # A satellite stream starts right after "Okay Nabu"; its first moments can
-  # still hold the end of the trigger phrase.
+  # Mac recorder only (record_satellite.py): its stream starts right after
+  # "Okay Nabu", so the first moments can still hold the end of that phrase.
+  # Takes recorded through Home Assistant start at the switch and are kept
+  # whole.
   skip_start_s: 0.6
   segment:
     vad_mode: 2
@@ -211,6 +213,14 @@ recordings:
   # recording is held back to measure false accepts per hour.
   negative_chunk_s: 10
   negative_test_fraction: 0.25
+  # Takes recorded through Home Assistant list the satellite's wake word
+  # detections in their sidecar. Around these detections everyday
+  # recordings are cut, because someone may have said the wake word; the
+  # windows go to clips/real_negative/review/. List a false accept's clip
+  # name in recordings/negative_keep.txt to keep it as a negative.
+  negative_cut_wake_words: ["Hey AIVI"]
+  # Seconds before and after a detection; it fires at the end of the phrase.
+  negative_cut_window_s: [2.5, 0.5]
 
 augmentation:
   duration_s: 3.2

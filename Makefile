@@ -1,8 +1,8 @@
 .PHONY: dev-up dev-up-debug dev-down prod-up prod-down lint format test eval \
-	stt-capture-test \
+	stt-capture-test wake-word-recorder-test \
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
-	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-import \
-	ww-features ww-train ww-evaluate
+	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-pull \
+	ww-import ww-features ww-train ww-evaluate
 
 ESPHOME_VERSION := 2026.9.0
 ESPHOME := uvx --from esphome==$(ESPHOME_VERSION) esphome
@@ -14,9 +14,11 @@ SAT_DIAG_CONFIG := esphome/aivi-sat-$(SAT)-diagnostics.yaml
 SAT_DEVICE = $(if $(DEVICE),--device $(DEVICE))
 
 # Wake word training, see docs/wake_word_training.md. HOST is the
-# satellite's IP address, RUN a training run name (default: new or latest).
+# satellite's IP address, RUN a training run name (default: new or latest),
+# JETSON the Jetson's IP address.
 WW := uv run --project training/wake_word python training/wake_word
 TAKES ?= 1
+WW_TAKES_REMOTE := /mnt/aivi-capture/drive/aivi-wake-word/recordings/
 
 dev-up:
 	docker compose -f compose/dev/docker-compose.yml up -d
@@ -34,18 +36,23 @@ prod-down:
 	docker compose -f compose/prod/docker-compose.yml down
 
 lint:
-	pylint --rcfile=.pylintrc services/llm_proxy/app services/stt_capture/app training/eval training/llm training/stt training/wake_word scripts/*.py
+	pylint --rcfile=.pylintrc services/llm_proxy/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts/*.py
 
 format:
-	black --line-length 80 services/llm_proxy/app services/stt_capture/app tests/stt_capture training/eval training/llm training/stt training/wake_word scripts/*.py
+	black --line-length 80 services/llm_proxy/app services/stt_capture/app services/wake_word_recorder/app tests/stt_capture tests/wake_word_recorder training/eval training/llm training/stt training/wake_word scripts/*.py
 
 test:
-	python -m compileall -q -x '/\.venv/' services/llm_proxy/app services/stt_capture/app training/eval training/llm training/stt training/wake_word scripts
+	python -m compileall -q -x '/\.venv/' services/llm_proxy/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts
 
 # Request capture relay (services/stt_capture); standard library only, so
 # pytest is the only extra.
 stt-capture-test:
 	uvx --python 3.12 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/stt_capture
+
+# Wake word recorder (services/wake_word_recorder); a pytest session of its
+# own, because both services name their package `app`.
+wake-word-recorder-test:
+	uvx --python 3.12 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/wake_word_recorder
 
 eval:
 	python training/eval/eval_tool_call_validity.py --dataset dev/datasets/llm
@@ -87,6 +94,14 @@ ww-record:
 ww-record-negative:
 	$(WW)/record_satellite.py --host $(HOST) --negative --takes $(TAKES) \
 		$(if $(DURATION),--seconds $(DURATION))
+
+# Takes recorded through Home Assistant, from the Jetson's capture drive.
+# MOVE=1 deletes them on the drive once they are copied.
+ww-pull:
+	$(if $(JETSON),,$(error Set JETSON=<jetson-ip>))
+	rsync -av --ignore-existing --exclude '*.part' \
+		$(if $(MOVE),--remove-source-files) \
+		aivi@$(JETSON):$(WW_TAKES_REMOTE) dev/datasets/wake_word/recordings/
 
 ww-import:
 	$(WW)/import_recordings.py

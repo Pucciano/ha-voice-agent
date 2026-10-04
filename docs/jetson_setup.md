@@ -2,11 +2,13 @@
 
 This runbook turns a classic Jetson Nano Developer Kit (4 GB, microSD) into
 the speech server of plan phase 4. It runs two Wyoming services for Home
-Assistant, plus a relay that can store requests for training:
+Assistant, plus a relay that can store requests for training and a recorder
+for wake word training takes:
 
 | Service | Purpose | Port |
 |---|---|---:|
 | stt-capture | relays speech to text to Speech-to-Phrase; stores requests on a USB drive while a satellite allows it ([section 9](#9-request-capture)) | 10300 |
+| wake-word-recorder | stores the wake word training takes that satellites stream when started in Home Assistant ([section 10](#10-wake-word-recording)) | 10800 |
 | Speech-to-Phrase | speech to text | internal |
 | Piper (`de_DE-thorsten-medium`) | text to speech | 10200 |
 | Whisper (`base-int8`, on demand) | speech to text, comparison only | 10301 |
@@ -77,8 +79,9 @@ card is enough; use a high-endurance card.
 - installs Docker Compose v2.29.7 and adds `aivi` to the `docker` group
 - creates `/srv/wyoming` and `/opt/aivi/compose`, and copies the compose file
   and its `custom_sentences/` there
-- builds the `stt-capture` image, installs `aivi-capture` and creates the
-  empty mount point of the capture drive ([section 9](#9-request-capture))
+- builds the `stt-capture` and `wake-word-recorder` images, installs
+  `aivi-capture` and creates the empty mount point of the capture drive
+  ([sections 9](#9-request-capture) and [10](#10-wake-word-recording))
 - installs `aivi-logmode` and sets it to dev
 
 NVIDIA's list of desktop-only packages is not used on purpose: on this image it
@@ -93,7 +96,7 @@ ssh aivi@192.168.55.1 mkdir -p /tmp/aivi-provision
 ```
 
 ```bash
-scp -r scripts/jetson_provision.sh scripts/jetson_logmode.sh scripts/jetson_capture.sh compose/jetson/docker-compose.yml compose/jetson/custom_sentences services/stt_capture aivi@192.168.55.1:/tmp/aivi-provision/
+scp -r scripts/jetson_provision.sh scripts/jetson_logmode.sh scripts/jetson_capture.sh compose/jetson/docker-compose.yml compose/jetson/custom_sentences services/stt_capture services/wake_word_recorder aivi@192.168.55.1:/tmp/aivi-provision/
 ```
 
 ```bash
@@ -302,7 +305,8 @@ ssh -t aivi@<jetson-ip> sudo aivi-capture setup
 
 `setup` refuses to run unless the root mount propagates mounts (`shared`).
 It adds an fstab entry, a udev rule that mounts the drive when it is plugged
-in, the marker file `.aivi-capture-volume` and the `aivi-stt/` directory.
+in, the marker file `.aivi-capture-volume` and the directories `aivi-stt/`
+and `aivi-wake-word/`.
 Without the drive, `/mnt/aivi-capture/drive` is an empty, immutable
 directory on the SD card. Check the state at any time:
 
@@ -311,7 +315,8 @@ ssh aivi@<jetson-ip> aivi-capture status
 ```
 
 Unmount before unplugging the drive, and mount it again after plugging it
-back in if udev has not done so already:
+back in if udev has not done so already. `eject` refuses while a wake word
+take runs; `mount` also creates a missing data directory:
 
 ```bash
 ssh -t aivi@<jetson-ip> sudo aivi-capture eject
@@ -417,6 +422,158 @@ python training/stt/prepare_dataset.py --input-dir dev/datasets/stt --output dev
 
 `--include-unverified` adds the rest, for review or evaluation only.
 
+## 10. Wake word recording
+
+The `wake-word-recorder` stores training takes for the custom wake word
+([wake word training, section 4](wake_word_training.md#4-record-the-household)).
+A take is started on the satellite's device page in Home Assistant. The
+satellite then streams the signal that microWakeWord hears straight to the
+recorder on port 10800. Home Assistant stays connected, and speech
+recognition on port 10300 is not involved.
+
+### How it works
+
+The satellite opens a TCP connection and sends Wyoming events: `take-start`
+with its id, the kind of take, the speaker, the length and a shared token,
+then `audio-chunk`, `detection` for wake word detections during the take,
+and `audio-stop`. The recorder answers `take-accepted` or an error code, and
+at the end `take-saved`; the satellite shows the result in its entity
+`Wake-Word-Aufnahme Status`. A take is accepted only if all of these hold:
+
+- the token matches `WAKE_WORD_RECORDER_TOKEN`
+- the satellite id has a `--satellite` line in the compose file
+- a "Hey AIVI" take names its speaker with lower case letters and digits,
+  single `_` or `-` in between
+- the take is at most two hours long
+- the capture drive is mounted, carries its marker file and the
+  `aivi-wake-word/` directory, and has at least 1 GiB free; the space is
+  checked again every minute of a take
+
+The audio is written while the take runs, in the layout of
+`dev/datasets/wake_word/recordings/` on the Mac:
+
+```text
+/mnt/aivi-capture/drive/aivi-wake-word/recordings/
+  positive/<speaker>/sat_living_room_20261004-143012.wav   16 kHz, 16 bit, mono
+  positive/<speaker>/sat_living_room_20261004-143012.json  speaker, length, end, detections
+  negative/sat_living_room_20261004-150000.wav
+  negative/sat_living_room_20261004-150000.json
+```
+
+Both files end in `.part` while the take runs. A take that ends without
+`audio-stop` keeps its audio, e.g. after a lost connection, a satellite
+restart or 10 s without data. Takes under 2 s are dropped. Leftovers of an
+interrupted recorder are finished when it starts again. The log names takes
+and their outcome, never a speaker.
+
+Takes are stored unencrypted. An everyday take records whole conversations;
+tell the household.
+
+### Token and address
+
+The satellites and the recorder share a token. Generate one:
+
+```bash
+openssl rand -hex 24
+```
+
+Put it into `esphome/secrets.yaml` as `wake_word_recorder_token`, with the
+Jetson's address as `wake_word_recorder_host`, and add it to the compose
+`.env` on the Jetson. The command asks for the token without echoing it,
+then for the sudo password:
+
+```bash
+ssh -t aivi@<jetson-ip> 'read -rsp "Wake word recorder token: " t && echo && printf "WAKE_WORD_RECORDER_TOKEN=%s\n" "$t" | sudo sh -c "cat >> /opt/aivi/compose/.env" && unset t'
+```
+
+Without the token the recorder runs but refuses every take; the other
+services do not depend on it. The satellites connect to the Jetson's
+address directly, so give the Jetson a DHCP reservation.
+
+### Install or update the recorder
+
+Provisioning builds the image. On a running Jetson, copy the files and build
+it; do not run the provisioning script again for this, because it switches
+the log mode to dev:
+
+```bash
+ssh aivi@<jetson-ip> 'rm -rf /tmp/aivi-update && mkdir /tmp/aivi-update'
+```
+
+```bash
+scp -r compose/jetson/docker-compose.yml scripts/jetson_capture.sh services/wake_word_recorder aivi@<jetson-ip>:/tmp/aivi-update/
+```
+
+```bash
+ssh aivi@<jetson-ip> 'docker build -t aivi/wake-word-recorder:0.1.0 /tmp/aivi-update/wake_word_recorder'
+```
+
+Update `aivi-capture` and create the `aivi-wake-word/` directory on the
+drive:
+
+```bash
+ssh -t aivi@<jetson-ip> 'sudo install -m 0755 /tmp/aivi-update/jetson_capture.sh /usr/local/sbin/aivi-capture && sudo aivi-capture mount'
+```
+
+The first time, try the recorder on a spare port. The token comes from the
+`.env` file without showing up in a command line:
+
+```bash
+ssh aivi@<jetson-ip> 'export WAKE_WORD_RECORDER_TOKEN="$(sed -n "s/^WAKE_WORD_RECORDER_TOKEN=//p" /opt/aivi/compose/.env)" && docker run --rm -d --name wake-word-recorder-trial -p 10810:10800 -e WAKE_WORD_RECORDER_TOKEN -e TZ=Europe/Berlin -v /mnt/aivi-capture:/capture:rslave aivi/wake-word-recorder:0.1.0 --satellite living_room'
+```
+
+`scripts/wyoming_smoke_test.py take` sends a WAV file (16 kHz, 16 bit, mono,
+at least 2 s) as a satellite would. It takes the token from
+`WAKE_WORD_RECORDER_TOKEN`, here read from `esphome/secrets.yaml`, or asks
+for it:
+
+```bash
+say -v Anna -o take.aiff "Hey Ei-wi. Hey Ei-wi. Hey Ei-wi." && afconvert -f WAVE -d LEI16@16000 -c 1 take.aiff take.wav
+```
+
+```bash
+WAKE_WORD_RECORDER_TOKEN="$(sed -n 's/^wake_word_recorder_token: "\(.*\)"$/\1/p' esphome/secrets.yaml)" uvx --from wyoming==1.10.2 python scripts/wyoming_smoke_test.py take --host <jetson-ip> --port 10810 --wav take.wav --speaker trial --detection 1.0
+```
+
+It prints `take-saved` with the take's name.
+
+```bash
+ssh aivi@<jetson-ip> docker stop wake-word-recorder-trial
+```
+
+The trial take lands in `aivi-wake-word/recordings/positive/trial/`; delete
+it afterwards. Then install the compose file, keeping the old one, and start
+the recorder:
+
+```bash
+ssh -t aivi@<jetson-ip> 'sudo sh -c "cp -p /opt/aivi/compose/docker-compose.yml /opt/aivi/compose/docker-compose.yml.bak && install -m 0644 /tmp/aivi-update/docker-compose.yml /opt/aivi/compose/docker-compose.yml"'
+```
+
+```bash
+ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d wake-word-recorder'
+```
+
+Naming the service leaves the running speech services alone. To roll back,
+restore the old compose file and run `docker compose up -d --remove-orphans`
+as in [section 9](#install-or-update-the-relay).
+
+### Satellites
+
+Each satellite that may record has a `--satellite <satellite_id>` line in
+the compose file, its `satellite_id` substitution. Its firmware needs
+`wake_word_recorder_host` and `wake_word_recorder_token` in
+`esphome/secrets.yaml` ([satellite flashing](satellite_flashing.md)).
+
+### Fetch the takes
+
+On the Mac, `make ww-pull` copies new takes into
+`dev/datasets/wake_word/recordings/` and skips takes that are still running;
+`MOVE=1` deletes the copied ones from the drive:
+
+```bash
+make ww-pull JETSON=<jetson-ip>
+```
+
 ## Logging
 
 `aivi-logmode` switches between two modes:
@@ -428,7 +585,8 @@ python training/stt/prepare_dataset.py --input-dir dev/datasets/stt --output dev
 rsyslog is off in both modes. In dev mode, `docker compose logs stt-capture`
 shows one line per request: the outcome and whether it was stored, or why
 not (`not_enabled`, `no_listening_satellite`, `no_marker`, …). Transcripts
-never appear in a log.
+never appear in a log. `docker compose logs wake-word-recorder` shows one
+line per take start, refusal and end, without speaker names.
 
 ```bash
 ssh -t aivi@192.168.55.1 sudo aivi-logmode prod
@@ -461,3 +619,7 @@ ssh -t aivi@192.168.55.1 sudo rm -rf /var/log/journal
 | Relay log `reason=ha_error` | Token in `.env` invalid, or an entity ID in `--satellite` does not exist | Check the entity IDs on the satellite's device page; renew the token ([section 4](#4-home-assistant-token)) |
 | No speech recognition after installing the relay | `stt-capture` not running, e.g. image not built | `docker compose ps`; build the image or roll back ([section 9](#9-request-capture)) |
 | Drive plugged in, `aivi-capture status` says not mounted | Plugged in after an eject, or udev missed it | `sudo aivi-capture mount` |
+| Satellite status `Fehler: Jetson nicht erreichbar` | `wake-word-recorder` not running, or `wake_word_recorder_host` wrong | `docker compose ps`; check the secret and flash again ([section 10](#10-wake-word-recording)) |
+| Satellite status `Fehler: Token passt nicht` or `Recorder ohne Token` | The token differs between `esphome/secrets.yaml` and `.env`, or is missing in `.env` | Set the same token in both; `docker compose up -d wake-word-recorder` ([section 10](#token-and-address)) |
+| Satellite status `Fehler: Laufwerk fehlt` | Drive not mounted, or no `aivi-wake-word/` directory | `sudo aivi-capture mount` |
+| `aivi-capture eject` refuses: a wake word take is running | A take holds its `.part` file open | Switch `Wake-Word-Aufnahme` off, then eject |

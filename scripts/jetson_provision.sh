@@ -5,7 +5,8 @@ set -euo pipefail
 # image, as a headless speech server for Home Assistant. Run it on the Jetson
 # as root, from a directory that also holds jetson_logmode.sh,
 # jetson_capture.sh, docker-compose.yml and custom_sentences/ (both from
-# compose/jetson) and stt_capture/ (services/stt_capture):
+# compose/jetson), stt_capture/ (services/stt_capture) and
+# wake_word_recorder/ (services/wake_word_recorder):
 #   sudo bash jetson_provision.sh
 # It is safe to run again. Reboot afterwards to finish the update.
 
@@ -37,7 +38,7 @@ for file in jetson_logmode.sh jetson_capture.sh docker-compose.yml; do
     exit 1
   fi
 done
-for dir in custom_sentences stt_capture; do
+for dir in custom_sentences stt_capture wake_word_recorder; do
   if [[ ! -d "${HERE}/${dir}" ]]; then
     echo "Missing ${HERE}/${dir}" >&2
     exit 1
@@ -104,11 +105,14 @@ cp -R "${HERE}/custom_sentences" /opt/aivi/compose/custom_sentences
 chown -R root:root /opt/aivi/compose/custom_sentences
 chmod -R u=rwX,go=rX /opt/aivi/compose/custom_sentences
 
-log "Request capture: relay image and drive mount point"
+log "Request capture and wake word recorder: images and drive mount point"
 # The image tag comes from the compose file, so both always agree.
 CAPTURE_IMAGE=$(sed -n 's/^ *image: *\(aivi\/stt-capture:[^ ]*\)$/\1/p' "${HERE}/docker-compose.yml")
 [[ -n ${CAPTURE_IMAGE} ]] || { echo "No stt-capture image in docker-compose.yml" >&2; exit 1; }
 docker build -t "${CAPTURE_IMAGE}" "${HERE}/stt_capture"
+RECORDER_IMAGE=$(sed -n 's/^ *image: *\(aivi\/wake-word-recorder:[^ ]*\)$/\1/p' "${HERE}/docker-compose.yml")
+[[ -n ${RECORDER_IMAGE} ]] || { echo "No wake-word-recorder image in docker-compose.yml" >&2; exit 1; }
+docker build -t "${RECORDER_IMAGE}" "${HERE}/wake_word_recorder"
 install -m 0755 "${HERE}/jetson_capture.sh" /usr/local/sbin/aivi-capture
 # Without a drive the relay only forwards; the drive is set up separately.
 /usr/local/sbin/aivi-capture prepare

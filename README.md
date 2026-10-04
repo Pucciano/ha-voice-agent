@@ -91,12 +91,13 @@ compose/
   dev/docker-compose.yml           development stack (adds llm_proxy)
   dev/docker-compose.override.yml  debug capture and packet inspection
   dev/vllm.config.yaml             vLLM engine configuration for dev
-  jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper, capture relay)
+  jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper, capture relay, wake word recorder)
 config/homeassistant/              Home Assistant automations (answer routing)
-esphome/                           satellite firmware: device files and packages
+esphome/                           satellite firmware: device files, packages and local components
 services/
   llm_proxy/                       FastAPI proxy with tool-call repair
   stt_capture/                     Wyoming relay that stores voice requests for STT training
+  wake_word_recorder/              stores wake word training takes streamed by the satellites
   stt_faster_whisper/              custom Whisper container build
 scripts/                           model download, health checks, smoke tests
 training/
@@ -223,7 +224,8 @@ python training/eval/eval_latency_tokens.py --dataset dev/datasets/llm
 
 The custom wake word "Hey AIVI" is trained separately, locally on Apple
 Silicon with microWakeWord, from synthetic samples and recordings made
-through the satellite. The `ww-*` Makefile targets run the steps, and
+through the satellite. Takes are started in Home Assistant and stored on the
+Jetson. The `ww-*` Makefile targets run the steps, and
 `docs/wake_word_training.md` is the runbook.
 
 ## Documentation
@@ -241,8 +243,8 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/satellite_flashing.md` is the per-room runbook for flashing a
   satellite board (XVF3800 firmware, ESP32, verification).
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
-  (Speech-to-Phrase and Piper over Wyoming) for the first test phase, and
-  the capture of voice requests for STT training.
+  (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
+  capture of voice requests for STT training, and the wake word recorder.
 
 ## Makefile helpers
 
@@ -260,7 +262,8 @@ make sat-logs SAT=living-room DEVICE=<port-or-ip>    # follow the log
 make ww-setup         # wake word: pinned tools, generators and datasets
 make ww-preview       # a few checked samples per pronunciation and voice
 make ww-samples       # synthetic wake word and confusable samples
-make ww-record HOST=<satellite-ip> SPEAKER=<name>   # record through the satellite
+make ww-pull JETSON=<jetson-ip>   # fetch the takes recorded through Home Assistant
+make ww-record HOST=<satellite-ip> SPEAKER=<name>   # record through the satellite without the Jetson
 make ww-import        # cut the recordings into clips
 make ww-features      # augmented spectrograms for training
 make ww-train         # train the quantized streaming model

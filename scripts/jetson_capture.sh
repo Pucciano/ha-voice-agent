@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# USB drive for the speech-to-text request capture on the Jetson
-# (docs/jetson_setup.md, section 9). Installed as /usr/local/sbin/aivi-capture.
+# USB drive for the speech-to-text request capture and the wake word
+# recordings on the Jetson (docs/jetson_setup.md, sections 9 and 10).
+# Installed as /usr/local/sbin/aivi-capture.
 #
 #   format <device>  partition and format a USB drive as ext4 (ERASES IT)
 #   setup [device]   mount the drive by UUID at boot and when plugged in
 #   prepare          create the empty, immutable mount point only
-#   mount            mount the drive again after an eject
+#   mount            mount the drive again after an eject, and create
+#                    missing data directories
 #   eject            unmount, so the drive can be unplugged
-#   status           show mount, marker, free space and samples
+#   status           show mount, marker, free space, samples and takes
 #
 # Layout: /mnt/aivi-capture is a plain directory on the SD card and is bind
-# mounted into the stt-capture container. The drive is mounted below it at
+# mounted into the stt-capture and wake-word-recorder containers. The drive is mounted below it at
 # /mnt/aivi-capture/drive, so mounts and unmounts reach the running container.
 # Without the drive, drive/ is an empty, immutable directory on the SD card
-# without the marker file, and the container writes nothing.
+# without the marker file, and the containers write nothing.
 #
 # Usage: sudo aivi-capture format /dev/sdX | setup | mount | eject
 #        aivi-capture status
@@ -25,6 +27,7 @@ PARENT=/mnt/aivi-capture
 MOUNT_POINT=${PARENT}/drive
 MARKER=.aivi-capture-volume
 SAMPLES_DIR=aivi-stt
+TAKES_DIR=aivi-wake-word
 # The container runs as uid 1000 (aivi).
 OWNER=1000:1000
 MOUNT_OPTIONS=nofail,noatime,nodev,nosuid,noexec,x-systemd.device-timeout=10s
@@ -154,6 +157,19 @@ EOF
   udevadm control --reload-rules
 }
 
+# The data directories of both services, owned by the container user. Only
+# on the mounted drive with its marker, never on the SD card.
+make_data_dirs() {
+  mountpoint -q "${MOUNT_POINT}" || die "The drive is not mounted."
+  [[ -f ${MOUNT_POINT}/${MARKER} ]] ||
+    die "The drive has no marker file. Run: sudo aivi-capture setup"
+  local dir
+  for dir in "${SAMPLES_DIR}" "${TAKES_DIR}"; do
+    install -d -o "${OWNER%:*}" -g "${OWNER#*:}" -m 0755 \
+      "${MOUNT_POINT}/${dir}"
+  done
+}
+
 cmd_setup() {
   require_root
   check_propagation
@@ -178,16 +194,16 @@ found ${#devices[@]}. Name it: sudo aivi-capture setup /dev/sdX1"
   write_fstab "${uuid}"
   write_hotplug "${uuid}"
   mount "${MOUNT_POINT}"
-  printf 'AIVI speech-to-text capture drive\nUUID=%s\n' "${uuid}" \
+  printf 'AIVI capture drive\nUUID=%s\n' "${uuid}" \
     >"${MOUNT_POINT}/${MARKER}"
-  install -d -o "${OWNER%:*}" -g "${OWNER#*:}" -m 0755 \
-    "${MOUNT_POINT}/${SAMPLES_DIR}"
+  make_data_dirs
   cmd_status
 }
 
 cmd_mount() {
   require_root
   systemctl start "${MOUNT_SERVICE}"
+  make_data_dirs
   cmd_status
 }
 
@@ -196,6 +212,10 @@ cmd_eject() {
   if ! mountpoint -q "${MOUNT_POINT}"; then
     echo "The drive is not mounted."
     return 0
+  fi
+  if [[ -n $(find "${MOUNT_POINT}/${TAKES_DIR}" -name '*.wav.part' \
+    -print -quit 2>/dev/null) ]]; then
+    die "A wake word take is running. Switch Wake-Word-Aufnahme off first."
   fi
   sync
   umount "${MOUNT_POINT}" || die "Could not unmount; try again in a moment."
@@ -229,7 +249,20 @@ cmd_status() {
     echo "samples:     $(grep -c . <<<"${names}" || true)"
     echo "newest:      $(tail -n 1 <<<"${names}")"
   else
-    echo "samples:     no ${SAMPLES_DIR}/ directory (run: sudo aivi-capture setup)"
+    echo "samples:     no ${SAMPLES_DIR}/ directory (run: sudo aivi-capture mount)"
+  fi
+  local takes="${MOUNT_POINT}/${TAKES_DIR}/recordings"
+  if [[ -d ${MOUNT_POINT}/${TAKES_DIR} ]]; then
+    local positive negative running newest
+    positive=$(find "${takes}/positive" -name '*.wav' 2>/dev/null | wc -l || true)
+    negative=$(find "${takes}/negative" -name '*.wav' 2>/dev/null | wc -l || true)
+    running=$(find "${takes}" -name '*.wav.part' 2>/dev/null | wc -l || true)
+    newest=$(find "${takes}" -name '*.wav' -printf '%T@ %f\n' 2>/dev/null |
+      sort -n | tail -n 1 | cut -d' ' -f2 || true)
+    echo "takes:       ${positive} positive, ${negative} everyday, ${running} running"
+    echo "newest take: ${newest:-none}"
+  else
+    echo "takes:       no ${TAKES_DIR}/ directory (run: sudo aivi-capture mount)"
   fi
 }
 

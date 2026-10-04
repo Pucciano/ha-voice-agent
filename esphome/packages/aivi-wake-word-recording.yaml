@@ -1,0 +1,188 @@
+# AIVI satellite: wake word recording package (issue #13)
+#
+# Records training takes for the custom wake word, started in Home
+# Assistant. The satellite streams the signal microWakeWord hears (channel
+# ${wake_word_channel}, 16 kHz, 16 bit) to the wake word recorder on the
+# Jetson, which stores it on the capture drive; see
+# docs/wake_word_training.md, section 4. Home Assistant stays connected.
+#
+#   Wake-Word-Aufnahme           switch: on starts a take, off ends it early;
+#                                it turns itself off when the take is over
+#   Wake-Word-Aufnahme Art       "Hey AIVI" again and again, or everyday sound
+#   Wake-Word-Aufnahme Sprecher  folder name of the speaker (positive takes)
+#   Wake-Word-Aufnahme Dauer     minutes
+#   Wake-Word-Aufnahme Status    what happened last
+#
+# During a "Hey AIVI" take the wake word does not start the assistant and
+# gives no feedback, so speakers do not adapt to the current model; during
+# an everyday take the assistant works as usual. Every detection during a
+# take goes into the recording's sidecar, so the import can cut real wake
+# words out of everyday sound. While a take runs, a light circles on the
+# ring: green for "Hey AIVI", red for everyday sound.
+#
+# Requires aivi-voice-input.yaml, aivi-leds.yaml, aivi-xvf3800.yaml and the
+# secrets wake_word_recorder_host and wake_word_recorder_token.
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [take_streamer]
+
+esp32:
+  framework:
+    sdkconfig_options:
+      # The recorder connection takes the last of the ten default sockets;
+      # keep room for an extra API client such as the ESPHome log viewer.
+      CONFIG_LWIP_MAX_SOCKETS: "12"
+
+take_streamer:
+  id: wake_word_take
+  microphone:
+    microphone: i2s_mics
+    channels: ${wake_word_channel}
+  host: !secret wake_word_recorder_host
+  token: !secret wake_word_recorder_token
+  satellite_id: ${satellite_id}
+  on_status:
+    - lambda: |-
+        auto *take = id(wake_word_take);
+        const bool recording = status == "recording";
+        id(assistant_paused) = recording && take->is_positive();
+        id(recording_mode) = recording ? (take->is_positive() ? 1 : 2) : 0;
+
+        char text[200];
+        if (status == "connecting") {
+          snprintf(text, sizeof(text), "Verbinde mit dem Jetson");
+        } else if (recording && take->is_positive()) {
+          snprintf(text, sizeof(text), "Aufnahme läuft: Hey AIVI, %s, %.1f min",
+                   take->speaker().c_str(), take->requested_seconds() / 60.0f);
+        } else if (recording) {
+          snprintf(text, sizeof(text), "Aufnahme läuft: Alltag, %.1f min",
+                   take->requested_seconds() / 60.0f);
+        } else if (status == "saved") {
+          const std::string &end = take->end_reason();
+          const char *note = "";
+          if (end == "muted") note = ", Mikrofon stummgeschaltet";
+          else if (end == "overflow") note = ", Netzwerk zu langsam";
+          else if (end == "low_space") note = ", Laufwerk fast voll";
+          else if (end == "too_long") note = ", Maximaldauer erreicht";
+          else if (end != "completed" && end != "stopped") note = ", vorzeitig beendet";
+          snprintf(text, sizeof(text), "Gespeichert: %s, %.0f s, %u Erkennungen%s",
+                   take->take_name().c_str(), take->saved_seconds(),
+                   static_cast<unsigned>(take->detections()), note);
+        } else {
+          const std::string &code = take->error_code();
+          const char *reason = code.c_str();
+          if (code == "unreachable") reason = "Jetson nicht erreichbar";
+          else if (code == "no_answer") reason = "Jetson antwortet nicht";
+          else if (code == "connection_lost") reason = "Verbindung zum Jetson verloren";
+          else if (code == "unauthorized") reason = "Token passt nicht";
+          else if (code == "disabled") reason = "Recorder ohne Token";
+          else if (code == "unknown_satellite") reason = "Satellit nicht freigegeben";
+          else if (code == "bad_speaker") reason = "Sprecher ungültig (a-z, 0-9, _ oder -)";
+          else if (code == "bad_duration") reason = "Dauer ungültig";
+          else if (code == "drive") reason = "Laufwerk fehlt";
+          else if (code == "low_space") reason = "Laufwerk voll";
+          else if (code == "write_failed") reason = "Schreibfehler auf dem Laufwerk";
+          else if (code == "too_short") reason = "kürzer als 2 s, verworfen";
+          else if (code == "cancelled") reason = "abgebrochen";
+          else if (code == "ota") reason = "abgebrochen durch ein Update";
+          snprintf(text, sizeof(text), "Fehler: %s", reason);
+        }
+        id(wake_word_take_status).publish_state(text);
+
+esphome:
+  on_boot:
+    - priority: -100
+      then:
+        - text_sensor.template.publish:
+            id: wake_word_take_status
+            state: Bereit
+
+micro_wake_word:
+  on_wake_word_detected:
+    # Added to the actions of aivi-voice-input.yaml: every detection during a
+    # take, also one during a running pipeline, goes into the sidecar.
+    - lambda: id(wake_word_take).mark_detection(wake_word);
+
+respeaker_xvf3800:
+  mute_switch:
+    on_turn_on:
+      # A muted microphone would only record silence.
+      - lambda: id(wake_word_take).stop_take("muted");
+
+switch:
+  - platform: template
+    id: wake_word_take_switch
+    name: Wake-Word-Aufnahme
+    icon: mdi:record-rec
+    # The take decides the state, so the switch turns off by itself.
+    lambda: return id(wake_word_take).is_active();
+    # No action at boot.
+    restore_mode: DISABLED
+    turn_on_action:
+      - lambda: |-
+          const bool positive =
+              id(wake_word_take_kind).current_option() == "Positiv (Hey AIVI)";
+          id(wake_word_take).start_take(
+              positive ? "positive" : "negative",
+              id(wake_word_take_speaker).state,
+              id(wake_word_take_minutes).state * 60.0f);
+    turn_off_action:
+      - lambda: id(wake_word_take).stop_take("stopped");
+
+select:
+  - platform: template
+    id: wake_word_take_kind
+    name: Wake-Word-Aufnahme Art
+    icon: mdi:waveform
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - Positiv (Hey AIVI)
+      - Negativ (Alltag)
+    initial_option: Positiv (Hey AIVI)
+    # Only when someone picks an option, not when the value is restored at
+    # boot: a fitting length for the kind of take.
+    set_action:
+      - number.set:
+          id: wake_word_take_minutes
+          value: !lambda |-
+            return x == "Negativ (Alltag)" ? 30.0f : 1.0f;
+
+text:
+  - platform: template
+    id: wake_word_take_speaker
+    name: Wake-Word-Aufnahme Sprecher
+    icon: mdi:account-voice
+    entity_category: config
+    mode: text
+    optimistic: true
+    restore_value: true
+    max_length: 24
+    # Checked by Home Assistant; the firmware and the recorder check again.
+    pattern: "^[a-z0-9]+([_-][a-z0-9]+)*$"
+
+number:
+  - platform: template
+    id: wake_word_take_minutes
+    name: Wake-Word-Aufnahme Dauer
+    icon: mdi:timer-outline
+    entity_category: config
+    unit_of_measurement: min
+    mode: box
+    min_value: 0.5
+    max_value: 120
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 1
+
+text_sensor:
+  - platform: template
+    id: wake_word_take_status
+    name: Wake-Word-Aufnahme Status
+    icon: mdi:record-rec
+    update_interval: never
