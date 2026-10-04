@@ -2,12 +2,17 @@ name: aivi-jetson
 
 # Speech services for Home Assistant on the Jetson Nano (plan phase 4). All
 # of them run on the CPU:
-#   speech-to-phrase  speech to text, Wyoming port 10300
+#   stt-capture       Wyoming port 10300 for speech to text: relays every
+#                     request byte for byte to speech-to-phrase and captures
+#                     it when the satellite's switch allows (issue #10)
+#   speech-to-phrase  speech to text, only inside this compose network
 #   piper             text to speech, Wyoming port 10200
 #   whisper           speech to text for comparison only, port 10301,
 #                     started with --profile compare
 #
-# Models are downloaded once into /srv/wyoming and then used offline.
+# Models are downloaded once into /srv/wyoming and then used offline. The
+# stt-capture image is built on the Jetson from services/stt_capture; see
+# docs/jetson_setup.md, section 9.
 #
 # Logging follows the Docker daemon default, which aivi-logmode switches
 # between prod (nothing kept) and dev. Do not add per-service logging here.
@@ -19,11 +24,56 @@ name: aivi-jetson
 # language. They are read when the model is trained, i.e. on every start.
 
 services:
+  stt-capture:
+    image: aivi/stt-capture:0.1.0
+    pull_policy: never
+    restart: unless-stopped
+    user: "1000:1000"
+    # Start order only. After a reboot Docker starts the containers without
+    # it, and the relay copes with an unreachable speech-to-phrase itself.
+    depends_on:
+      speech-to-phrase:
+        condition: service_healthy
+    ports:
+      - "10300:10300"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      HASS_WEBSOCKET_URI: ${HASS_WEBSOCKET_URI:?HASS_WEBSOCKET_URI missing in .env}
+      HASS_TOKEN: ${HASS_TOKEN:?HASS_TOKEN missing in .env}
+    volumes:
+      # The capture drive is mounted at /mnt/aivi-capture/drive by
+      # aivi-capture. rslave lets a drive mounted later, or an eject, reach
+      # the running container.
+      - type: bind
+        source: /mnt/aivi-capture
+        target: /capture
+        bind:
+          propagation: rslave
+    command:
+      - --upstream
+      - tcp://speech-to-phrase:10300
+      - --capture-dir
+      - /capture/drive
+      # <satellite_id>=<assist_satellite entity>,<capture switch entity>
+      - --satellite
+      - living_room=assist_satellite.wohnung_wohnzimmer_aivi_satellit_assist_satellit,switch.wohnung_wohnzimmer_aivi_satellit_anfragen_aufzeichnen
+
   speech-to-phrase:
     image: rhasspy/wyoming-speech-to-phrase:1.4.3
     restart: unless-stopped
-    ports:
-      - "10300:10300"
+    # Wyoming liveness only: speech-to-phrase answers describe while it is
+    # still training (about 11 s after every start), and then returns empty
+    # transcripts. A real speech-to-text request shows readiness.
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import socket; s = socket.create_connection(('127.0.0.1', 10300), 3); s.sendall(b'{\"type\": \"describe\"}\\n'); assert b'\"info\"' in s.recv(65536)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       TZ: ${TZ:-Europe/Berlin}
     volumes:

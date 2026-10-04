@@ -61,6 +61,9 @@ def main() -> None:
         "speaker": args.speaker,
         "audio_file": target_audio.name,
         "transcript_file": transcript_path.name,
+        # The transcript is given by a person, so it counts as reviewed.
+        "label_source": "manual",
+        "verified": True,
     }
     import json
 

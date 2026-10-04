@@ -1,8 +1,9 @@
 # AIVI satellite: diagnostics package
 #
-# Microphone level per I2S channel, Wi-Fi signal and a restart button. The
-# levels show whether audio arrives and how loud the room is while the wake
-# word is tested. Wake word and pipeline use channel 1 (see aivi-voice-input).
+# Microphone level per I2S channel, Wi-Fi signal, a restart button and the
+# request capture switch. The levels show whether audio arrives and how loud
+# the room is while the wake word is tested. Wake word and pipeline use
+# channel 1 (see aivi-voice-input).
 #
 # Levels are dBFS over two seconds of the processed XVF3800 output: 0 is
 # digital full scale (clipping), everything below is negative. "Pegel" is the
@@ -51,3 +52,17 @@ button:
   - platform: restart
     name: Neustart
     entity_category: diagnostic
+
+switch:
+  # Request capture for speech recognition training (docs/jetson_setup.md,
+  # section 9). The satellite only holds the setting: for every request the
+  # capture relay on the Jetson reads it from Home Assistant and stores the
+  # audio and the recognised text on its USB drive. Off after every restart,
+  # so each recording period starts with a deliberate switch-on.
+  - platform: template
+    id: request_capture
+    name: Anfragen aufzeichnen
+    icon: mdi:record-rec
+    entity_category: config
+    optimistic: true
+    restore_mode: ALWAYS_OFF

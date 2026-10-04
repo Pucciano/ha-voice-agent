@@ -4,7 +4,8 @@ set -euo pipefail
 # One-time setup of a Jetson Nano, installed from the JetPack 4.6.x SD card
 # image, as a headless speech server for Home Assistant. Run it on the Jetson
 # as root, from a directory that also holds jetson_logmode.sh,
-# docker-compose.yml and custom_sentences/ (both from compose/jetson):
+# jetson_capture.sh, docker-compose.yml and custom_sentences/ (both from
+# compose/jetson) and stt_capture/ (services/stt_capture):
 #   sudo bash jetson_provision.sh
 # It is safe to run again. Reboot afterwards to finish the update.
 
@@ -30,16 +31,18 @@ if ! grep -q "^# R32 " /etc/nv_tegra_release; then
   echo "This is not an L4T R32 (JetPack 4) system." >&2
   exit 1
 fi
-for file in jetson_logmode.sh docker-compose.yml; do
+for file in jetson_logmode.sh jetson_capture.sh docker-compose.yml; do
   if [[ ! -f "${HERE}/${file}" ]]; then
     echo "Missing ${HERE}/${file}" >&2
     exit 1
   fi
 done
-if [[ ! -d "${HERE}/custom_sentences" ]]; then
-  echo "Missing ${HERE}/custom_sentences" >&2
-  exit 1
-fi
+for dir in custom_sentences stt_capture; do
+  if [[ ! -d "${HERE}/${dir}" ]]; then
+    echo "Missing ${HERE}/${dir}" >&2
+    exit 1
+  fi
+done
 
 export DEBIAN_FRONTEND=noninteractive
 APT=(apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
@@ -100,6 +103,15 @@ rm -rf /opt/aivi/compose/custom_sentences
 cp -R "${HERE}/custom_sentences" /opt/aivi/compose/custom_sentences
 chown -R root:root /opt/aivi/compose/custom_sentences
 chmod -R u=rwX,go=rX /opt/aivi/compose/custom_sentences
+
+log "Request capture: relay image and drive mount point"
+# The image tag comes from the compose file, so both always agree.
+CAPTURE_IMAGE=$(sed -n 's/^ *image: *\(aivi\/stt-capture:[^ ]*\)$/\1/p' "${HERE}/docker-compose.yml")
+[[ -n ${CAPTURE_IMAGE} ]] || { echo "No stt-capture image in docker-compose.yml" >&2; exit 1; }
+docker build -t "${CAPTURE_IMAGE}" "${HERE}/stt_capture"
+install -m 0755 "${HERE}/jetson_capture.sh" /usr/local/sbin/aivi-capture
+# Without a drive the relay only forwards; the drive is set up separately.
+/usr/local/sbin/aivi-capture prepare
 
 log "Log mode switch, dev mode while the system is tested"
 install -m 0755 "${HERE}/jetson_logmode.sh" /usr/local/sbin/aivi-logmode

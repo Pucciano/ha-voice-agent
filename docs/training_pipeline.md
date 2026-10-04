@@ -38,12 +38,19 @@ This supports auditing and supervised fine-tuning conversion.
 
 ## 3) STT capture workflow
 
-The stack provides two pathways:
+The stack provides three pathways:
 
 1. **Network-level debug capture** (dev override):
    - `stt-packet-capture` writes pcap traces to `dev/logs/`.
 2. **Structured dataset ingest:**
    - use `scripts/stt_capture_ingest.py` to store audio+transcript+metadata rows.
+     The transcript is given by a person, so these samples count as reviewed
+     (`verified: true`, `label_source: manual`).
+3. **Request capture on the Jetson** (`services/stt_capture`):
+   - while a satellite's switch `Anfragen aufzeichnen` is on, every voice
+     request is stored on the Jetson's USB drive in the same layout, with the
+     recogniser's text as a pseudo label (`verified: false`). Setup, fetching
+     and the review steps are in `docs/jetson_setup.md`, section 9.
 
 Example ingest:
 
@@ -103,6 +110,11 @@ The training output directory includes LoRA adapter weights and tokenizer
 artifacts that can be reused for downstream evaluation/inference.
 
 ## 6) STT adaptation placeholder
+
+Only reviewed samples (`verified: true` in `metadata.json`) are training
+labels. A captured transcript is what Speech-to-Phrase recognised, chosen from
+known sentences; empty and wrong results are review material, not labels.
+`--include-unverified` adds unreviewed samples for review or evaluation only.
 
 Create STT manifest:
 
