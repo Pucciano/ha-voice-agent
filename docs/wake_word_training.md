@@ -29,7 +29,7 @@ The model learns from three sources:
 | 1 | `make ww-setup` | Pinned tools, generators and datasets |
 | 2 | `make ww-preview` | A few checked samples per pronunciation and voice |
 | 3 | `make ww-samples` | 12,000 wake word and 6,000 confusable samples |
-| 4 | `make ww-record`, phone | Household recordings |
+| 4 | Home Assistant, `make ww-pull`, phone | Household recordings |
 | 5 | `make ww-import` | Recordings cut into clips |
 | 6 | `make ww-features` | Augmented spectrograms |
 | 7 | `make ww-train` | Quantized streaming model |
@@ -52,7 +52,9 @@ committed.
 - `uv`. The targets run in their own environment, `training/wake_word/`,
   with Python 3.12, which uv installs on first use.
 - About 40 GB of free disk space.
-- For satellite recordings: the satellite's API key in
+- For satellite recordings: the wake word recorder on the Jetson
+  ([Jetson runbook, section 10](jetson_setup.md#10-wake-word-recording))
+  and the Jetson's IP address. Without the Jetson: the satellite's API key in
   `esphome/secrets.yaml` (see `docs/satellite_flashing.md`) and its IP
   address.
 
@@ -154,13 +156,86 @@ rejection.
 Aim for at least 100 "Hey AIVI" per person who will use the assistant, plus
 one to three hours of everyday sound without the wake word.
 
-### Through the satellite
+### Through Home Assistant
 
 The satellite hears the wake word through the XVF3800, and the recordings go
 through exactly that signal chain: channel 1 at 16 kHz, the same input the
-model gets on the device.
+model gets on the device. A take is started on the satellite's device page in
+Home Assistant. The satellite streams it to the wake word recorder on the
+Jetson, which stores it on the capture drive
+([Jetson runbook, section 10](jetson_setup.md#10-wake-word-recording)).
+Home Assistant stays connected the whole time.
 
-ESPHome serves one voice assistant client at a time. Before recording,
+| Entity | Purpose |
+|---|---|
+| `Wake-Word-Aufnahme Art` | `Positiv (Hey AIVI)` or `Negativ (Alltag)`; choosing one sets a fitting length |
+| `Wake-Word-Aufnahme Sprecher` | Folder name of the speaker for "Hey AIVI" takes: lower case letters and digits, single `_` or `-` in between |
+| `Wake-Word-Aufnahme Dauer` | Length in minutes, 0.5 to 120 |
+| `Wake-Word-Aufnahme` | On starts a take, off ends it early; it turns off by itself at the end |
+| `Wake-Word-Aufnahme Status` | The last result, e.g. `Gespeichert: sat_living_room_20261004-143012, 60 s, 21 Erkennungen`, or an error |
+
+A "Hey AIVI" take:
+
+1. Set `Wake-Word-Aufnahme Art` to `Positiv (Hey AIVI)`, enter the speaker
+   and check the length (1 minute).
+2. Switch `Wake-Word-Aufnahme` on. While the take runs, a green light circles
+   on the ring.
+3. Say "Hey AIVI" every two to three seconds. Vary the distance (next to it,
+   1 m, 3 m, across the room), the direction, the volume (quiet, normal,
+   loud), the speed and the tone (a question, tired, in passing). Record some
+   takes with music or the TV playing softly.
+4. Say nothing else during a take. Every utterance becomes a wake word clip.
+
+During a "Hey AIVI" take the wake word starts nothing and the ring gives no
+feedback, so nobody adapts their voice to what the current model already
+detects. The satellite still counts its detections; the status shows the
+number at the end, if `Wake Word` is set to `Hey AIVI` or `Beide`.
+
+Everyday sound: set `Wake-Word-Aufnahme Art` to `Negativ (Alltag)`
+(30 minutes) and switch the take on. A red light circles. Leave it running
+during normal life: conversations, TV, music, cooking, phone calls. The
+assistant works as usual, but use "Okay Nabu" for commands: a "Hey AIVI" the
+satellite detects is cut out at import (section 5), one it misses stays in
+the everyday sound and teaches the model the wrong thing. This audio is used
+three ways: as background noise in the augmentation, as negative training
+data, and, from the last quarter of each recording, to measure false accepts
+per hour.
+
+Takes are stored unencrypted on the Jetson's drive. An everyday take records
+whole conversations, so tell the household, and stop the take when guests
+arrive. The circling light shows every running take. Muting the microphone
+ends a take. The switch is an ordinary Home Assistant entity, so an
+automation can start takes too, e.g. every evening.
+
+Fetch the takes to this machine:
+
+```bash
+make ww-pull JETSON=<jetson-ip>
+```
+
+New takes land in `dev/datasets/wake_word/recordings/`, in the same layout
+as all other recordings; a take that is still running is skipped. `MOVE=1`
+deletes the copied takes from the drive. Each take has a sidecar
+`<take>.json` with the speaker, the length, why it ended and the wake word
+detections.
+
+A card for a dashboard (the entity ids follow the satellite's name):
+
+```yaml
+type: entities
+title: Wake-Word-Datensatz
+entities:
+  - select.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_art
+  - text.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_sprecher
+  - number.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_dauer
+  - switch.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme
+  - sensor.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_status
+```
+
+### Without the Jetson
+
+This machine can record from the satellite itself, through the same signal
+chain. ESPHome serves one voice assistant client at a time. Before recording,
 disable the satellite's ESPHome entry in Home Assistant: Settings, Devices &
 services, ESPHome, the satellite, the three-dot menu, Disable. Enable it
 again afterwards. The recorder refuses to start while Home Assistant still
@@ -189,10 +264,8 @@ Record everyday sound the same way:
 make ww-record-negative HOST=<satellite-ip> DURATION=1800 TAKES=2
 ```
 
-Leave the take running during normal life: conversations, TV, music, cooking,
-phone calls. The wake word must not be said. This audio is used three ways:
-as background noise in the augmentation, as negative training data, and, from
-the last quarter of each recording, to measure false accepts per hour.
+During these takes the assistant does not work, and the wake word must not
+be said.
 
 ### By phone
 
@@ -242,6 +315,17 @@ the recall.
 
 Everyday recordings are cut into 10 s training chunks. The last quarter of
 each stays one piece for the false accept measurement.
+
+Everyday takes recorded through Home Assistant list the satellite's wake
+word detections in their sidecar. Around every "Hey AIVI" detection, from
+2.5 s before to 0.5 s after it, the recording is cut, because someone may
+have said the wake word. The cut windows go to
+`dev/datasets/wake_word/clips/real_negative/review/`. Listen to them: a
+window without "Hey AIVI" is a false accept of the current model, and those
+are the most useful negatives. Put its file name into
+`dev/datasets/wake_word/recordings/negative_keep.txt` and import again to
+keep it. Training chunks never span a cut, and the held-out quarter becomes
+one track per uninterrupted piece.
 
 ## 6. Build the features
 
@@ -349,8 +433,13 @@ announcements. Disable it on the device page to avoid confusion.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Recorder: Home Assistant still holds the voice assistant | Only one voice assistant client is allowed | Disable the ESPHome entry in Home Assistant |
-| A take never starts | "Okay Nabu" not detected, or microphone muted | Check the ring; switch `Mikrofon stumm` off |
+| `Fehler: Jetson nicht erreichbar` | Recorder not running, or a wrong `wake_word_recorder_host` | [Jetson runbook, section 10](jetson_setup.md#10-wake-word-recording) |
+| `Fehler: Token passt nicht` or `Recorder ohne Token` | `wake_word_recorder_token` and the Jetson's `WAKE_WORD_RECORDER_TOKEN` differ, or the latter is missing | Set the same value in both |
+| `Fehler: Laufwerk fehlt` or `Laufwerk voll` | Capture drive not mounted, or under 1 GiB free | `aivi-capture status` on the Jetson |
+| `Fehler: Sprecher ungültig` | Capital letter, space or umlaut in the name | Write it like `juergen` |
+| `Gespeichert: …, Netzwerk zu langsam` | Wi-Fi stalled for more than 5 s | The audio up to the stall is kept; start a new take |
+| Mac recorder: Home Assistant still holds the voice assistant | Only one voice assistant client is allowed | Disable the ESPHome entry in Home Assistant |
+| Mac recorder: a take never starts | "Okay Nabu" not detected, or microphone muted | Check the ring; switch `Mikrofon stumm` off |
 | Few or no clips from a recording | Too quiet, or no pauses between the phrases | Speak up, pause two seconds, check `clips.csv` |
 | Many clips to review | Whisper hears no "Hey" at the start | Listen; add the good ones to `accepted.txt` |
 | German preview samples are seconds long | Duration noise too high | Lower `noise_scale_ws` for `de_DE-mls-medium` |
