@@ -13,7 +13,7 @@ From top to bottom:
 |---|---|
 | Header | Clock, date, the initial of every person entity with a home or away badge, one summary line (lights on, open windows and doors, running appliances) |
 | Safety | Red banner per wet leak sensor; amber pill when a leak sensor is offline; green "Alles trocken" otherwise |
-| Weather | Current condition, today's high and low, today and the next two days with temperature bars and a dot for the current temperature |
+| Weather | Current condition, today's high and low, today and the next two days with chance of precipitation (from 20 %), temperature bars and a dot for the current temperature; below them the active and announced DWD weather warnings |
 | Licht · Wohnzimmer | Vitrine, Pendel, Stehlampe; "Alle N aus" turns off every counted light in the flat after a confirmation |
 | Musik | Active Bluesound player, play controls, volume, room chips to join or leave the group |
 | Raumklima | Temperature, humidity and window state per room, with the time a window was opened |
@@ -72,7 +72,32 @@ applies there.
   during a programme, so the Geräte section and the appliance tiles follow
   these flags instead of the plug power.
 - `sensor.time` from the Time & Date integration drives the clock.
+- Weather from the Deutscher Wetterdienst, see Weather sources.
 - The two font files in `/config/www/fonts/` (see Fonts).
+
+## Weather sources
+
+The weather card reads two integrations:
+
+- **DWD Weather** (HACS, `FL550/dwd_weather`, tested 5.2.0) with the MOSMIX
+  forecast of the nearest DWD station that has measurements. Its setup lists
+  the stations by distance; a mark in front of the name means measured values
+  are available. Pick the data source "mixed": current values are measured,
+  the forecast comes from MOSMIX. Name the station `DWD`, so the entity is
+  `weather.dwd`. The daily forecast includes the chance of precipitation, and
+  the condition of a day summarises all its hours (rain when more than a fifth
+  of them have rain), not the weather at noon as with met.no.
+- **DWD weather warnings** (core integration `dwd_weather_warnings`) with the
+  warncell id of the municipality from the DWD list `cap_warncellids_csv`
+  (ids starting with 8). Municipality cells are more precise than district
+  cells (starting with 1). Rename the two sensors to
+  `sensor.dwd_warning_level` (warnings in effect) and
+  `sensor.dwd_advance_warning_level` (announced warnings).
+
+The card shows up to two warnings, highest level first, with the DWD colours:
+yellow and orange on an amber background, red (severe) and violet (extreme)
+filled. The entities are not exposed to Assist; the voice assistant keeps
+using the met.no entity `weather.forecast_zuhause`.
 
 ## Deploy
 
@@ -135,7 +160,7 @@ Shelly app; both are open to the whole network otherwise.
 | Symptom | Cause |
 |---|---|
 | HA header and sidebar visible | kiosk-mode `users` does not match the display name of the logged-in user |
-| "Vorhersage wird geladen …" | The daily forecast arrives through a websocket subscription; it shows within a minute |
+| "Vorhersage wird geladen …" | The daily forecast arrives through a websocket subscription; it shows within a minute. If it stays, check that `weather.dwd` exists and has a forecast |
 | Summary counts too many lights | A group member lacks the label `light_count_exclude` |
 | Music card controls the wrong speaker | Check `sensor.active_media_player` in the developer tools |
 | A room is missing in the climate section | The area lacks the label `wall_display_climate` or a temperature sensor in its settings |
