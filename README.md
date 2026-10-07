@@ -92,7 +92,7 @@ compose/
   dev/docker-compose.override.yml  debug capture and packet inspection
   dev/vllm.config.yaml             vLLM engine configuration for dev
   jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper, capture relay, wake word recorder)
-config/homeassistant/              Home Assistant automations (answer routing)
+config/homeassistant/              Home Assistant automations, dashboards and helper templates
 esphome/                           satellite firmware: device files, packages and local components
 services/
   llm_proxy/                       FastAPI proxy with tool-call repair
@@ -245,6 +245,8 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
   (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
   capture of voice requests for STT training, and the wake word recorder.
+- `docs/wall_display.md` covers the living room wall display: dashboard
+  layout, display settings, Home Assistant prerequisites and deployment.
 
 ## Makefile helpers
 
