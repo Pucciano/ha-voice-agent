@@ -395,27 +395,33 @@ button_card_templates:
         ]]]
 
   # --------------------------------------------------------------- weather --
+  # Forecast from DWD Weather (HACS, MOSMIX), warnings from the DWD weather
+  # warnings integration; see docs/wall_display.md.
   wd_weather:
     template: wd_base
-    entity: weather.forecast_zuhause
+    entity: weather.dwd
     tap_action:
       action: more-info
     variables:
-      # Daily forecasts are no longer state attributes; subscribe once per page.
+      # Daily forecasts are no longer state attributes; subscribe once per page
+      # and entity, so a changed entity does not need a page reload.
       subscribe:
         force_eval: true
         value: |
           [[[
             window.wdForecastCard = this;
-            if (!window.wdForecastSubscribed && hass.connection) {
-              window.wdForecastSubscribed = true;
+            window.wdForecasts = window.wdForecasts || {};
+            window.wdForecastSubs = window.wdForecastSubs || {};
+            const id = entity.entity_id;
+            if (!window.wdForecastSubs[id] && hass.connection) {
+              window.wdForecastSubs[id] = true;
               hass.connection.subscribeMessage((msg) => {
-                window.wdForecast = msg.forecast;
+                window.wdForecasts[id] = msg.forecast;
                 // Re-render now instead of on the next minute tick.
                 window.wdForecastCard?.requestUpdate?.('_config');
               }, {
                 type: 'weather/subscribe_forecast',
-                entity_id: 'weather.forecast_zuhause',
+                entity_id: id,
                 forecast_type: 'daily',
               });
             }
@@ -464,10 +470,64 @@ button_card_templates:
           };
         ]]]
       night: "[[[ return states['sun.sun']?.state === 'below_horizon'; ]]]"
+      # DWD days start at 00:00 UTC, so shortly after midnight the first
+      # entry is still yesterday.
       days: |
         [[[
           states['sensor.time'];
-          return (window.wdForecast || []).slice(0, 3);
+          const start = new Date();
+          start.setHours(0, 0, 0, 0);
+          return ((window.wdForecasts || {})[entity.entity_id] || [])
+            .filter((d) => new Date(d.datetime) >= start).slice(0, 3);
+        ]]]
+      # Active and announced warnings, highest level first.
+      warnings: |
+        [[[
+          const list = [];
+          [[states['sensor.dwd_warning_level'], false], [states['sensor.dwd_advance_warning_level'], true]]
+            .forEach(([s, future]) => {
+              const a = s?.attributes || {};
+              for (let i = 1; i <= (a.warning_count || 0); i++) {
+                list.push({ future, level: a[`warning_${i}_level`] || 1, name: a[`warning_${i}_name`] || '',
+                  description: a[`warning_${i}_description`] || '', start: a[`warning_${i}_start`],
+                  end: a[`warning_${i}_end`] });
+              }
+            });
+          return list.sort((x, y) => (y.level - x.level) || (new Date(x.start) - new Date(y.start)));
+        ]]]
+      # DWD sends event names in capitals: "GEWITTER MIT STARKREGEN".
+      warning_title: |
+        [[[
+          const small = ['mit', 'und', 'oder', 'vor', 'von', 'bei'];
+          return (name) => name.toLowerCase().split(' ')
+            .map((w, i) => (i && small.includes(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+        ]]]
+      warning_icon: |
+        [[[
+          return (name) => {
+            const n = name.toUpperCase();
+            if (n.includes('GEWITTER')) return 'mdi:weather-lightning';
+            if (/STURM|ORKAN|BÖEN|WIND/.test(n)) return 'mdi:weather-windy';
+            if (n.includes('SCHNEE')) return 'mdi:weather-snowy-heavy';
+            if (/GLÄTTE|GLATTEIS|FROST/.test(n)) return 'mdi:snowflake-alert';
+            if (n.includes('REGEN')) return 'mdi:weather-pouring';
+            if (n.includes('NEBEL')) return 'mdi:weather-fog';
+            if (n.includes('HITZE')) return 'mdi:thermometer-alert';
+            return 'mdi:alert-outline';
+          };
+        ]]]
+      # "18:00" today, "morgen 06:00", "Fr 06:00" later.
+      warning_time: |
+        [[[
+          return (iso) => {
+            const d = new Date(iso);
+            const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+            const diff = Math.round((day(d) - day(new Date())) / 86400000);
+            const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+            if (diff === 0) return time;
+            if (diff === 1) return `morgen ${time}`;
+            return `${d.toLocaleDateString('de-DE', { weekday: 'short' }).replace('.', '')} ${time}`;
+          };
         ]]]
     styles:
       card:
@@ -537,7 +597,7 @@ button_card_templates:
           const pct = (v) => ((Math.min(Math.max(v, lo), hi) - lo) / span * 100).toFixed(1);
           const todayKey = new Date().toDateString();
           const current = entity.attributes.temperature;
-          return `<div style="display:flex;flex-direction:column;gap:4px">` + days.map((d) => {
+          const rows = `<div style="display:flex;flex-direction:column;gap:4px">` + days.map((d) => {
             const date = new Date(d.datetime);
             const isToday = date.toDateString() === todayKey;
             const label = isToday ? 'Heute' : date.toLocaleDateString('de-DE', { weekday: 'short' }).replace('.', '');
@@ -545,11 +605,15 @@ button_card_templates:
               ? `<span style="position:absolute;top:-3px;left:calc(${pct(current)}% - 6px);width:12px;height:12px;
                   box-sizing:border-box;border-radius:6px;background:var(--wd-card);border:2px solid var(--wd-ink)"></span>`
               : '';
+            // Chance of precipitation, shown from 20 %.
+            const pop = d.precipitation_probability;
+            const rain = pop != null && pop >= 20 ? `${Math.round(pop)} %` : '';
             return `<div style="display:flex;align-items:center;gap:8px;height:20px;font-size:13px;
                 font-variant-numeric:tabular-nums">
               <span style="width:42px;font-weight:700;text-align:left">${label}</span>
               <ha-icon icon="${variables.icon_for(d.condition, false)}"
                 style="--mdc-icon-size:18px;display:flex;color:${variables.color_for(d.condition)}"></ha-icon>
+              <span style="width:34px;font-size:12px;font-weight:700;text-align:right;color:var(--wd-rain)">${rain}</span>
               <span style="width:28px;text-align:right;color:var(--wd-muted)">${Math.round(d.templow)}°</span>
               <span style="position:relative;flex:1;height:6px;border-radius:3px;background:var(--wd-track)">
                 <span style="position:absolute;top:0;bottom:0;left:${pct(d.templow)}%;
@@ -558,6 +622,34 @@ button_card_templates:
                 ${dot}</span>
               <span style="width:28px;font-weight:700;text-align:left">${Math.round(d.temperature)}°</span></div>`;
           }).join('') + `</div>`;
+          // DWD levels: 1 yellow, 2 orange, 3 red (severe), 4 violet (extreme).
+          const shown = variables.warnings.slice(0, 2);
+          const more = variables.warnings.length - shown.length;
+          const warnings = shown.map((w) => {
+            const level = Math.min(Math.max(w.level, 1), 4);
+            const tone = ['#E3BC3A', '#E07A1F', '#B3261E', '#7B1FA2'][level - 1];
+            const severe = level >= 3;
+            const when = w.future ? `ab ${variables.warning_time(w.start)}` : `bis ${variables.warning_time(w.end)}`;
+            return `<div style="display:flex;gap:10px;padding:10px 12px;box-sizing:border-box;border-radius:14px;
+                background:${severe ? tone : 'var(--wd-warn-bg)'};color:${severe ? '#FFFFFF' : 'var(--wd-ink)'}">
+              <span style="width:30px;height:30px;flex-shrink:0;border-radius:15px;display:flex;align-items:center;
+                justify-content:center;background:${severe ? 'rgba(255,255,255,0.18)' : tone};
+                color:${severe ? '#FFFFFF' : '#2B2420'}">
+                <ha-icon icon="${variables.warning_icon(w.name)}" style="--mdc-icon-size:18px;display:flex"></ha-icon></span>
+              <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;text-align:left">
+                <span style="display:flex;gap:8px;align-items:baseline">
+                  <span style="flex:1;min-width:0;font-size:14px;line-height:18px;font-weight:800;white-space:nowrap;
+                    overflow:hidden;text-overflow:ellipsis">${variables.warning_title(w.name)}</span>
+                  <span style="font-size:12px;font-weight:600;white-space:nowrap">${when}</span></span>
+                <span style="font-size:12px;line-height:16px;opacity:0.85;white-space:normal;display:-webkit-box;
+                  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${w.description}</span></span></div>`;
+          }).join('');
+          const extra = more > 0
+            ? `<div style="font-size:12px;color:var(--wd-muted);text-align:left">+ ${more} weitere ${more === 1 ? 'Warnung' : 'Warnungen'}</div>`
+            : '';
+          return rows + (warnings
+            ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:12px">${warnings}${extra}</div>`
+            : '');
         ]]]
 
   # -------------------------------------------------------------- sections --
