@@ -1,0 +1,1352 @@
+# Living room wall display ("Bedienfeld"), Shelly Wall Display X2i in portrait.
+# Storage-mode dashboard: paste into the raw configuration editor of the
+# dashboard `dashboard-living-room-wall-display`. Setup and prerequisites:
+# docs/wall_display.md.
+#
+# Layout: one panel view. The root card `wd_root` sets the palette (light by
+# day, dark while the sun is below the horizon) as CSS variables and holds
+# every section as a nested card. All JavaScript lives in the templates below.
+
+kiosk_mode:
+  user_settings:
+    # kiosk-mode matches the display name of the HA user, not the username.
+    - users:
+        - Shelly Wall Display
+      hide_header: true
+      hide_sidebar: true
+
+title: Wanddisplay
+
+button_card_templates:
+  # ---------------------------------------------------------------- basics --
+  wd_base:
+    show_name: false
+    show_icon: false
+    show_state: false
+    show_label: false
+    tap_action:
+      action: none
+    hold_action:
+      action: none
+    double_tap_action:
+      action: none
+    styles:
+      card:
+        - padding: 0
+        - background: none
+        - border: none
+        - border-radius: 0
+        - box-shadow: none
+        - overflow: visible
+        - font-family: var(--wd-font)
+        - color: var(--wd-ink)
+        - cursor: default
+        - -webkit-tap-highlight-color: transparent
+      name:
+        - color: inherit
+      state:
+        - color: inherit
+      icon:
+        - color: inherit
+
+  wd_helpers:
+    variables:
+      # "09:25" for today, "28.09." for an earlier day.
+      since: |
+        [[[
+          return (iso) => {
+            const d = new Date(iso);
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            if (d.toDateString() === now.toDateString()) {
+              return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            }
+            return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.`;
+          };
+        ]]]
+      fmt_temp: |
+        [[[
+          return (v) => {
+            const n = parseFloat(v);
+            return isNaN(n) ? '–' : `${n.toFixed(1).replace('.', ',')}°`;
+          };
+        ]]]
+
+  wd_light_counter:
+    variables:
+      # Lights that are on, without group members and other parts of a lamp.
+      counted_on: |
+        [[[
+          return Object.keys(states).filter((id) =>
+            id.startsWith('light.')
+            && states[id].state === 'on'
+            && !(hass.entities[id]?.labels || []).includes('light_count_exclude')
+            && !hass.entities[id]?.hidden);
+        ]]]
+
+  wd_openings:
+    variables:
+      # Window and door contacts with the label all_windows.
+      openings: |
+        [[[
+          return Object.keys(hass.entities)
+            .filter((id) => (hass.entities[id].labels || []).includes('all_windows'))
+            .map((id) => states[id])
+            .filter((s) => s);
+        ]]]
+      open_text: |
+        [[[
+          const open = variables.openings.filter((s) => s.state === 'on');
+          const windows = open.filter((s) => s.attributes.device_class === 'window').length;
+          const doors = open.filter((s) => s.attributes.device_class !== 'window')
+            .map((s) => s.attributes.friendly_name);
+          const parts = [];
+          if (windows) parts.push(`${windows} Fenster`);
+          parts.push(...doors);
+          return parts.length ? `${parts.join(' + ')} offen` : '';
+        ]]]
+
+  wd_appliances:
+    variables:
+      appliances:
+        - entity: sensor.laundry_washing_machine_plug_power
+          running: input_boolean.washer_running
+          name: Waschmaschine
+        - entity: sensor.laundry_dryer_plug_power
+          running: input_boolean.dryer_running
+          name: Trockner
+      # The running flags are debounced by automations, so short pauses in a
+      # programme, when the power drops to a few watts, do not count as idle.
+      # Without the flag: above 10 W running, 5 to 10 W ready.
+      appliance_state: |
+        [[[
+          return (id) => {
+            const flag = variables.appliances.find((a) => a.entity === id)?.running;
+            if (flag && states[flag]?.state === 'on') return 'running';
+            const p = parseFloat(states[id]?.state);
+            if (isNaN(p)) return 'unknown';
+            if (p > 10) return 'running';
+            if (p >= 5) return 'ready';
+            return 'idle';
+          };
+        ]]]
+
+  wd_player:
+    variables:
+      speakers:
+        - entity: media_player.pulse_flex_living_room_1
+          room: Wohnzimmer
+        - entity: media_player.pulse_flex_kitchen_1
+          room: Küche
+      player_id: |
+        [[[
+          const id = states['sensor.active_media_player']?.state;
+          return id && id.startsWith('media_player.') ? id : 'media_player.pulse_flex_living_room_1';
+        ]]]
+      player: '[[[ return states[variables.player_id]; ]]]'
+      members: |
+        [[[
+          const m = variables.player?.attributes?.group_members;
+          return Array.isArray(m) && m.length ? m : [variables.player_id];
+        ]]]
+
+  # ------------------------------------------------------------------ root --
+  wd_root:
+    template: wd_base
+    variables:
+      # @font-face does not work inside shadow DOM, so the rules go into the
+      # document once. The variable fonts (latin subset) are served by Home
+      # Assistant from /config/www/fonts; the display needs no internet.
+      load_fonts:
+        force_eval: true
+        value: |
+          [[[
+            if (!document.getElementById('wd-fonts')) {
+              const style = document.createElement('style');
+              style.id = 'wd-fonts';
+              style.textContent = `
+                @font-face { font-family: 'Figtree'; font-style: normal; font-weight: 300 900;
+                  font-display: swap; src: url('/local/fonts/figtree-latin.woff2') format('woff2'); }
+                @font-face { font-family: 'Newsreader'; font-style: normal; font-weight: 200 800;
+                  font-display: swap; src: url('/local/fonts/newsreader-latin.woff2') format('woff2'); }`;
+              document.head.appendChild(style);
+            }
+          ]]]
+    extra_styles: |
+      [[[
+        const dark = states['sun.sun']?.state === 'below_horizon';
+        const day = {
+          'bg': 'linear-gradient(180deg, #F3ECE4 0%, #EFE5DB 55%, #EBDDCE 100%)',
+          'card': '#FAF6F1', 'surface2': '#F2E9DF', 'ink': '#2B2420', 'muted': '#5B4D44',
+          'line': 'rgba(43,36,32,0.10)', 'line-strong': 'rgba(43,36,32,0.22)',
+          'shadow': '0 10px 24px rgba(43,36,32,0.10)', 'accent-bg': 'rgba(196,138,90,0.20)',
+          'ok-ink': '#1F5E23', 'ok-bg': 'rgba(46,125,50,0.15)',
+          'warn-ink': '#7A4500', 'warn-bg': 'rgba(178,106,0,0.18)',
+          'track': '#E6D9CB', 'play-bg': '#2B2420', 'play-fg': '#FAF6F1',
+          'tile-off': 'rgba(250,246,241,0.55)', 'tile-on': '#FFFFFF',
+          'tile-on-shadow': '0 6px 16px rgba(43,36,32,0.12)',
+          'ring': '#F3ECE4', 'home': '#2E7D32', 'away': '#8A7B70',
+          'sun': '#B06F16', 'rain': '#5E8199'
+        };
+        const night = {
+          'bg': 'linear-gradient(180deg, #1F1A17 0%, #1B1714 55%, #181412 100%)',
+          'card': '#2A2420', 'surface2': '#352D28', 'ink': '#F2EAE1', 'muted': '#B9AA9C',
+          'line': 'rgba(242,234,225,0.10)', 'line-strong': 'rgba(242,234,225,0.24)',
+          'shadow': '0 10px 24px rgba(0,0,0,0.35)', 'accent-bg': 'rgba(217,162,115,0.18)',
+          'ok-ink': '#8FD196', 'ok-bg': 'rgba(124,195,131,0.16)',
+          'warn-ink': '#F0B860', 'warn-bg': 'rgba(224,160,64,0.18)',
+          'track': '#41372F', 'play-bg': '#F2EAE1', 'play-fg': '#2B2420',
+          'tile-off': 'rgba(42,36,32,0.72)', 'tile-on': '#F2EAE1',
+          'tile-on-shadow': '0 6px 16px rgba(0,0,0,0.40)',
+          'ring': '#1F1A17', 'home': '#4CA055', 'away': '#9C8D80',
+          'sun': '#E3A54A', 'rain': '#8FB0C4'
+        };
+        const vars = Object.entries(dark ? night : day).map(([k, v]) => `--wd-${k}: ${v};`).join(' ');
+        return `:host { ${vars} --wd-font: 'Figtree', system-ui, sans-serif;
+          --wd-display: 'Newsreader', Georgia, serif; --grid-card-gap: 10px; }`;
+      ]]]
+    styles:
+      card:
+        - padding: 18px 16px 28px
+        - box-sizing: border-box
+        - min-height: 100vh
+        - background: var(--wd-bg)
+      grid:
+        - grid-template-areas: '"header" "weather" "lights" "music" "climate" "devices"'
+        - grid-template-columns: minmax(0, 1fr)
+        - row-gap: 20px
+        - align-content: start
+      custom_fields:
+        header:
+          - justify-self: stretch
+        weather:
+          - justify-self: stretch
+        lights:
+          - justify-self: stretch
+        music:
+          - justify-self: stretch
+        climate:
+          - justify-self: stretch
+        devices:
+          - justify-self: stretch
+
+  # ---------------------------------------------------------------- header --
+  wd_header:
+    template:
+      - wd_base
+      - wd_light_counter
+      - wd_openings
+      - wd_appliances
+    styles:
+      grid:
+        - grid-template-areas: '"clock date people" "summary summary summary" "status status status"'
+        - grid-template-columns: auto minmax(0, 1fr) auto
+        - column-gap: 14px
+        - row-gap: 6px
+        - align-items: center
+      custom_fields:
+        clock:
+          - font-family: var(--wd-display)
+          - font-size: 58px
+          - line-height: 60px
+          - letter-spacing: -0.02em
+          - font-variant-numeric: tabular-nums
+        date:
+          - justify-self: start
+          - text-align: left
+        people:
+          - justify-self: end
+        summary:
+          - justify-self: start
+          - text-align: left
+          - font-size: 13px
+          - line-height: 18px
+          - color: var(--wd-muted)
+        status:
+          - justify-self: stretch
+          - margin-top: 2px
+    custom_fields:
+      clock: "[[[ return states['sensor.time']?.state ?? ''; ]]]"
+      date: |
+        [[[
+          states['sensor.time'];
+          const now = new Date();
+          const weekday = now.toLocaleDateString('de-DE', { weekday: 'long' });
+          const day = now.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' });
+          return `<div style="display:flex;flex-direction:column;gap:1px">
+            <span style="font-size:14px;line-height:18px;font-weight:700">${weekday}</span>
+            <span style="font-size:13px;line-height:17px;color:var(--wd-muted)">${day}</span></div>`;
+        ]]]
+      # Every person entity, shown by initial; names stay out of this file.
+      people: |
+        [[[
+          const people = Object.keys(states).filter((id) => id.startsWith('person.')).sort()
+            .map((id) => states[id]);
+          return `<div style="display:flex;gap:6px">` + people.map((s) => {
+            const home = s.state === 'home';
+            const name = s.attributes.friendly_name || s.entity_id;
+            const initial = name.trim().charAt(0).toUpperCase();
+            return `<span title="${name}" style="position:relative;width:36px;height:36px;display:block">
+              <span style="width:36px;height:36px;border-radius:18px;background:var(--wd-accent-bg);display:flex;
+                align-items:center;justify-content:center;font-size:14px;font-weight:800">${initial}</span>
+              <span style="position:absolute;right:-3px;bottom:-3px;width:17px;height:17px;box-sizing:border-box;
+                border-radius:9px;background:${home ? 'var(--wd-home)' : 'var(--wd-away)'};border:2px solid var(--wd-ring);
+                display:flex;align-items:center;justify-content:center;color:#FFFFFF">
+                <ha-icon icon="${home ? 'mdi:home' : 'mdi:map-marker-outline'}" style="--mdc-icon-size:10px;display:flex"></ha-icon>
+              </span></span>`;
+          }).join('') + `</div>`;
+        ]]]
+      summary: |
+        [[[
+          const n = variables.counted_on.length;
+          const parts = [n ? `${n} ${n === 1 ? 'Licht' : 'Lichter'} an` : 'Alle Lichter aus'];
+          parts.push(variables.open_text || 'Alle Fenster zu');
+          variables.appliances.forEach((a) => {
+            if (variables.appliance_state(a.entity) === 'running') parts.push(`${a.name} läuft`);
+          });
+          return parts.join(' · ');
+        ]]]
+      status:
+        card:
+          type: custom:button-card
+          template: wd_status
+
+  wd_status:
+    template:
+      - wd_base
+      - wd_helpers
+    variables:
+      leak_places:
+        binary_sensor.kitchen_dishwasher_leak_water_leak:
+          where: bei der Spülmaschine
+          place: Küche
+        binary_sensor.klippbok_water_leak_sensor_wasserleck:
+          where: in der Waschküche
+          place: Waschküche
+      sensors: |
+        [[[
+          return Object.keys(states)
+            .filter((id) => id.startsWith('binary_sensor.'))
+            .filter((id) => states[id]?.attributes?.device_class === 'moisture');
+        ]]]
+      wet: "[[[ return variables.sensors.filter((id) => states[id].state === 'on'); ]]]"
+      offline: "[[[ return variables.sensors.filter((id) => ['unavailable', 'unknown'].includes(states[id].state)); ]]]"
+      place: |
+        [[[
+          return (id) => {
+            if (variables.leak_places[id]) return variables.leak_places[id];
+            const e = hass.entities[id];
+            const area = hass.areas[e?.area_id || hass.devices[e?.device_id]?.area_id]?.name;
+            const name = area || states[id].attributes.friendly_name;
+            return { where: `(${name})`, place: name };
+          };
+        ]]]
+    tap_action: |
+      [[[
+        const id = variables.wet[0] || variables.offline[0];
+        return id ? { action: 'more-info', entity: id } : { action: 'none' };
+      ]]]
+    styles:
+      card:
+        - cursor: pointer
+      grid:
+        - grid-template-areas: '"body"'
+        - grid-template-columns: minmax(0, 1fr)
+      custom_fields:
+        body:
+          - justify-self: stretch
+    custom_fields:
+      body: |
+        [[[
+          const pill = (bg, ink, icon, text, aside) => `<div style="display:flex;align-items:center;gap:8px;
+              height:38px;padding:0 14px;box-sizing:border-box;border-radius:19px;background:${bg};color:${ink};
+              font-size:13px;font-weight:700">
+            <ha-icon icon="${icon}" style="--mdc-icon-size:16px;display:flex"></ha-icon>
+            <span style="flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${text}</span>
+            <span style="font-size:12px;font-weight:500;white-space:nowrap">${aside}</span></div>`;
+          let out = '';
+          variables.wet.forEach((id) => {
+            const p = variables.place(id);
+            out += `<div style="display:flex;align-items:center;gap:12px;min-height:56px;padding:10px 14px;
+                box-sizing:border-box;border-radius:18px;background:#B3261E;color:#FFFFFF;margin-bottom:6px">
+              <span style="width:36px;height:36px;flex-shrink:0;border-radius:18px;background:rgba(255,255,255,0.18);
+                display:flex;align-items:center;justify-content:center">
+                <ha-icon icon="mdi:water-alert" style="--mdc-icon-size:20px;display:flex"></ha-icon></span>
+              <span style="display:flex;flex-direction:column;gap:2px;text-align:left">
+                <span style="font-size:15px;line-height:19px;font-weight:800">Wasser ${p.where}</span>
+                <span style="font-size:12px;line-height:16px;color:rgba(255,255,255,0.9)">
+                  Wassermelder ${p.place} · seit ${variables.since(states[id].last_changed)}</span></span></div>`;
+          });
+          const off = variables.offline;
+          if (off.length === 1) {
+            out += pill('var(--wd-warn-bg)', 'var(--wd-warn-ink)', 'mdi:wifi-off',
+              `Wassermelder ${variables.place(off[0]).place} offline`,
+              `seit ${variables.since(states[off[0]].last_changed)}`);
+          } else if (off.length > 1) {
+            out += pill('var(--wd-warn-bg)', 'var(--wd-warn-ink)', 'mdi:wifi-off',
+              `${off.length} Wassermelder offline`, off.map((id) => variables.place(id).place).join(', '));
+          }
+          if (!out) {
+            const n = variables.sensors.length;
+            out = pill('var(--wd-ok-bg)', 'var(--wd-ok-ink)', 'mdi:shield-check-outline', 'Alles trocken',
+              `${n} Wassermelder ok`);
+          }
+          return out;
+        ]]]
+
+  # --------------------------------------------------------------- weather --
+  wd_weather:
+    template: wd_base
+    entity: weather.forecast_zuhause
+    tap_action:
+      action: more-info
+    variables:
+      # Daily forecasts are no longer state attributes; subscribe once per page.
+      subscribe:
+        force_eval: true
+        value: |
+          [[[
+            window.wdForecastCard = this;
+            if (!window.wdForecastSubscribed && hass.connection) {
+              window.wdForecastSubscribed = true;
+              hass.connection.subscribeMessage((msg) => {
+                window.wdForecast = msg.forecast;
+                // Re-render now instead of on the next minute tick.
+                window.wdForecastCard?.requestUpdate?.('_config');
+              }, {
+                type: 'weather/subscribe_forecast',
+                entity_id: 'weather.forecast_zuhause',
+                forecast_type: 'daily',
+              });
+            }
+          ]]]
+      icon_for: |
+        [[[
+          return (condition, night) => ({
+            'clear-night': 'mdi:weather-night',
+            'cloudy': 'mdi:weather-cloudy',
+            'exceptional': 'mdi:alert-circle-outline',
+            'fog': 'mdi:weather-fog',
+            'hail': 'mdi:weather-hail',
+            'lightning': 'mdi:weather-lightning',
+            'lightning-rainy': 'mdi:weather-lightning-rainy',
+            'partlycloudy': night ? 'mdi:weather-night-partly-cloudy' : 'mdi:weather-partly-cloudy',
+            'pouring': 'mdi:weather-pouring',
+            'rainy': 'mdi:weather-rainy',
+            'snowy': 'mdi:weather-snowy',
+            'snowy-rainy': 'mdi:weather-snowy-rainy',
+            'sunny': 'mdi:weather-sunny',
+            'windy': 'mdi:weather-windy',
+            'windy-variant': 'mdi:weather-windy-variant',
+          }[condition] || 'mdi:weather-cloudy');
+        ]]]
+      color_for: |
+        [[[
+          return (condition) => {
+            if (['sunny', 'partlycloudy'].includes(condition)) return 'var(--wd-sun)';
+            if (['rainy', 'pouring', 'lightning-rainy', 'snowy-rainy', 'hail'].includes(condition)) return 'var(--wd-rain)';
+            return 'var(--wd-muted)';
+          };
+        ]]]
+      temp_color: |
+        [[[
+          return (v) => {
+            const stops = [[8, [111, 143, 163]], [15, [194, 165, 94]], [22, [184, 104, 60]]];
+            if (v <= stops[0][0]) return `rgb(${stops[0][1].join(',')})`;
+            for (let i = 1; i < stops.length; i++) {
+              if (v <= stops[i][0]) {
+                const [a, b] = [stops[i - 1], stops[i]];
+                const f = (v - a[0]) / (b[0] - a[0]);
+                return `rgb(${a[1].map((x, k) => Math.round(x + (b[1][k] - x) * f)).join(',')})`;
+              }
+            }
+            return `rgb(${stops[stops.length - 1][1].join(',')})`;
+          };
+        ]]]
+      night: "[[[ return states['sun.sun']?.state === 'below_horizon'; ]]]"
+      days: |
+        [[[
+          states['sensor.time'];
+          return (window.wdForecast || []).slice(0, 4);
+        ]]]
+    styles:
+      card:
+        - padding: 14px 16px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+        - cursor: pointer
+      grid:
+        - grid-template-areas: '"wicon temp cond hilo" "days days days days"'
+        - grid-template-columns: 40px auto minmax(0, 1fr) auto
+        - grid-template-rows: 44px auto
+        - column-gap: 10px
+        - row-gap: 12px
+        - align-items: center
+      custom_fields:
+        temp:
+          - font-family: var(--wd-display)
+          - font-size: 44px
+          - line-height: 44px
+          - letter-spacing: -0.02em
+          - font-variant-numeric: tabular-nums
+        cond:
+          - justify-self: start
+          - text-align: left
+          - min-width: 0
+        hilo:
+          - justify-self: end
+        days:
+          - justify-self: stretch
+    custom_fields:
+      wicon: |
+        [[[
+          return `<ha-icon icon="${variables.icon_for(entity.state, variables.night)}"
+            style="--mdc-icon-size:40px;display:flex;color:${variables.color_for(entity.state)}"></ha-icon>`;
+        ]]]
+      temp: "[[[ const t = entity.attributes.temperature; return t == null ? '–' : `${Math.round(t)}°`; ]]]"
+      cond: |
+        [[[
+          const a = entity.attributes;
+          const detail = [a.wind_speed != null ? `Wind ${Math.round(a.wind_speed)} km/h` : '',
+            a.humidity != null ? `Feuchte ${Math.round(a.humidity)} %` : ''].filter(Boolean).join(' · ');
+          return `<div style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:15px;line-height:19px;font-weight:700">${helpers.localize(entity)}</span>
+            <span style="font-size:12px;line-height:16px;color:var(--wd-muted);white-space:nowrap;overflow:hidden;
+              text-overflow:ellipsis">${detail}</span></div>`;
+        ]]]
+      hilo: |
+        [[[
+          const today = variables.days[0];
+          if (!today) return '';
+          return `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:13px;
+              line-height:17px;font-variant-numeric:tabular-nums">
+            <span style="font-weight:700">↑ ${Math.round(today.temperature)}°</span>
+            <span style="color:var(--wd-muted)">↓ ${Math.round(today.templow)}°</span></div>`;
+        ]]]
+      days: |
+        [[[
+          const days = variables.days;
+          if (!days.length) {
+            return `<div style="font-size:13px;color:var(--wd-muted);text-align:left">Vorhersage wird geladen …</div>`;
+          }
+          const lo = Math.min(...days.map((d) => d.templow));
+          const hi = Math.max(...days.map((d) => d.temperature));
+          const span = hi - lo || 1;
+          const pct = (v) => ((Math.min(Math.max(v, lo), hi) - lo) / span * 100).toFixed(1);
+          const todayKey = new Date().toDateString();
+          const current = entity.attributes.temperature;
+          return `<div style="display:flex;flex-direction:column;gap:4px">` + days.map((d) => {
+            const date = new Date(d.datetime);
+            const isToday = date.toDateString() === todayKey;
+            const label = isToday ? 'Heute' : date.toLocaleDateString('de-DE', { weekday: 'short' }).replace('.', '');
+            const dot = isToday && current != null
+              ? `<span style="position:absolute;top:-3px;left:calc(${pct(current)}% - 6px);width:12px;height:12px;
+                  box-sizing:border-box;border-radius:6px;background:var(--wd-card);border:2px solid var(--wd-ink)"></span>`
+              : '';
+            return `<div style="display:flex;align-items:center;gap:8px;height:20px;font-size:13px;
+                font-variant-numeric:tabular-nums">
+              <span style="width:42px;font-weight:700;text-align:left">${label}</span>
+              <ha-icon icon="${variables.icon_for(d.condition, false)}"
+                style="--mdc-icon-size:18px;display:flex;color:${variables.color_for(d.condition)}"></ha-icon>
+              <span style="width:28px;text-align:right;color:var(--wd-muted)">${Math.round(d.templow)}°</span>
+              <span style="position:relative;flex:1;height:6px;border-radius:3px;background:var(--wd-track)">
+                <span style="position:absolute;top:0;bottom:0;left:${pct(d.templow)}%;
+                  width:${(pct(d.temperature) - pct(d.templow)).toFixed(1)}%;border-radius:3px;
+                  background:linear-gradient(90deg, ${variables.temp_color(d.templow)}, ${variables.temp_color(d.temperature)})"></span>
+                ${dot}</span>
+              <span style="width:28px;font-weight:700;text-align:left">${Math.round(d.temperature)}°</span></div>`;
+          }).join('') + `</div>`;
+        ]]]
+
+  # -------------------------------------------------------------- sections --
+  # A section: small uppercase heading with an icon, an optional pill or
+  # button on the right (custom field `aside`) and the content (`body`).
+  wd_section:
+    template: wd_base
+    styles:
+      grid:
+        - grid-template-areas: '"hicon htitle aside" "body body body"'
+        - grid-template-columns: 16px minmax(0, 1fr) auto
+        - grid-template-rows: 36px auto
+        - column-gap: 8px
+        - row-gap: 8px
+        - align-items: center
+      custom_fields:
+        hicon:
+          - color: var(--wd-muted)
+          - display: flex
+        htitle:
+          - justify-self: start
+          - font-size: 12px
+          - font-weight: 800
+          - letter-spacing: 0.08em
+          - text-transform: uppercase
+          - color: var(--wd-muted)
+        aside:
+          - justify-self: end
+        body:
+          - justify-self: stretch
+          - align-self: stretch
+    custom_fields:
+      hicon: '[[[ return `<ha-icon icon="${variables.icon}" style="--mdc-icon-size:16px;display:flex"></ha-icon>`; ]]]'
+      htitle: '[[[ return variables.title; ]]]'
+
+  wd_pill:
+    template: wd_base
+    show_name: true
+    styles:
+      card:
+        - height: 28px
+        - padding: 0 12px
+        - box-sizing: border-box
+        - border-radius: 14px
+        - background: var(--wd-accent-bg)
+      name:
+        - font-size: 12px
+        - font-weight: 700
+        - white-space: nowrap
+
+  # ---------------------------------------------------------------- lights --
+  wd_all_off:
+    template:
+      - wd_base
+      - wd_light_counter
+    show_name: true
+    show_icon: true
+    icon: mdi:power
+    name: |
+      [[[
+        const n = variables.counted_on.length;
+        return n ? `Alle ${n} aus` : 'Alles aus';
+      ]]]
+    tap_action: |
+      [[[
+        const ids = variables.counted_on;
+        if (!ids.length) return { action: 'none' };
+        return {
+          action: 'perform-action',
+          perform_action: 'light.turn_off',
+          target: { entity_id: ids },
+          confirmation: { text: `${ids.length} ${ids.length === 1 ? 'Licht' : 'Lichter'} im ganzen Haus ausschalten?` },
+        };
+      ]]]
+    styles:
+      card:
+        - height: 36px
+        - padding: 0 14px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - border: 1px solid var(--wd-line-strong)
+        - cursor: pointer
+        - opacity: "[[[ return variables.counted_on.length ? 1 : 0.5; ]]]"
+      grid:
+        - grid-template-areas: '"i n"'
+        - grid-template-columns: 14px auto
+        - column-gap: 6px
+      icon:
+        - width: 14px
+        - color: var(--wd-ink)
+      name:
+        - font-size: 13px
+        - font-weight: 700
+
+  wd_light_tile:
+    template: wd_base
+    show_name: true
+    show_icon: true
+    show_state: true
+    tap_action:
+      action: toggle
+    hold_action:
+      action: more-info
+    variables:
+      is_on: "[[[ return entity?.state === 'on'; ]]]"
+    state_display: |
+      [[[
+        if (!entity || ['unavailable', 'unknown'].includes(entity.state)) return 'Nicht erreichbar';
+        if (entity.state !== 'on') return 'Aus';
+        const b = entity.attributes.brightness;
+        return b ? `An · ${Math.round(b / 2.55)} %` : 'An';
+      ]]]
+    styles:
+      card:
+        - height: 96px
+        - padding: 12px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - cursor: pointer
+        - background: "[[[ return variables.is_on ? 'var(--wd-tile-on)' : 'var(--wd-tile-off)'; ]]]"
+        - border: "[[[ return variables.is_on ? '1px solid transparent' : '1px solid var(--wd-line)'; ]]]"
+        - box-shadow: "[[[ return variables.is_on ? 'var(--wd-tile-on-shadow)' : 'none'; ]]]"
+        - color: "[[[ return variables.is_on ? '#2B2420' : 'var(--wd-ink)'; ]]]"
+      grid:
+        - grid-template-areas: '"i" "n" "s"'
+        - grid-template-columns: minmax(0, 1fr)
+        - grid-template-rows: 34px 1fr min-content
+        - justify-items: start
+      img_cell:
+        - width: 34px
+        - height: 34px
+        - border-radius: 17px
+        - justify-self: start
+        - background: "[[[ return variables.is_on ? '#A86F43' : 'var(--wd-surface2)'; ]]]"
+      icon:
+        - width: 18px
+        - color: "[[[ return variables.is_on ? '#FFFFFF' : 'var(--wd-muted)'; ]]]"
+      name:
+        - justify-self: start
+        - align-self: end
+        - font-size: 14px
+        - line-height: 18px
+        - font-weight: 700
+      state:
+        - justify-self: start
+        - font-size: 12px
+        - line-height: 16px
+        - color: "[[[ return variables.is_on ? '#5B4D44' : 'var(--wd-muted)'; ]]]"
+
+  # ----------------------------------------------------------------- music --
+  wd_music_where:
+    template:
+      - wd_pill
+      - wd_player
+    name: |
+      [[[
+        const rooms = variables.speakers.filter((s) => variables.members.includes(s.entity)).map((s) => s.room);
+        return rooms.length ? rooms.join(' + ') : 'Kein Lautsprecher';
+      ]]]
+
+  wd_music:
+    template:
+      - wd_base
+      - wd_player
+    extra_styles: |
+      input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; }
+      input[type=range]::-webkit-slider-runnable-track {
+        height: 6px; border-radius: 3px;
+        background: linear-gradient(to right, #A86F43 var(--wd-vol), var(--wd-track) var(--wd-vol));
+      }
+      input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 22px; height: 22px; margin-top: -8px; border-radius: 11px;
+        background: var(--wd-card); border: 2px solid #A86F43; box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      }
+    styles:
+      card:
+        - padding: 14px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+      grid:
+        - grid-template-areas: '"art info prev play next" "vol vol vol vol vol" "chips chips chips chips chips"'
+        - grid-template-columns: 56px minmax(0, 1fr) 40px 44px 40px
+        - grid-template-rows: 56px 28px 36px
+        - column-gap: 6px
+        - row-gap: 12px
+        - align-items: center
+      custom_fields:
+        art:
+          - margin-right: 4px
+        info:
+          - justify-self: stretch
+          - min-width: 0
+        vol:
+          - justify-self: stretch
+        chips:
+          - justify-self: stretch
+    custom_fields:
+      art: |
+        [[[
+          const pic = variables.player?.attributes?.entity_picture;
+          if (pic) {
+            return `<img src="${pic}" alt="Cover" style="width:56px;height:56px;object-fit:cover;border-radius:14px;display:block">`;
+          }
+          return `<div style="width:56px;height:56px;border-radius:14px;background:var(--wd-surface2);display:flex;
+            align-items:center;justify-content:center;color:var(--wd-muted)">
+            <ha-icon icon="mdi:music-note" style="--mdc-icon-size:22px;display:flex"></ha-icon></div>`;
+        ]]]
+      info: |
+        [[[
+          const p = variables.player;
+          const a = p?.attributes || {};
+          const idle = !a.media_title || a.media_title === 'Spotify - playing elsewhere';
+          const title = idle ? 'Keine Wiedergabe' : a.media_title;
+          const artist = idle ? '' : (a.media_artist || a.media_album_name || '');
+          const state = p?.state === 'playing' ? 'Wiedergabe' : p?.state === 'paused' ? 'Pausiert' : '';
+          const meta = [a.source, state].filter(Boolean).join(' · ');
+          const line = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+          return `<div style="display:flex;flex-direction:column;gap:1px;text-align:left;min-width:0">
+            <span style="font-size:15px;line-height:19px;font-weight:800;${line}">${title}</span>
+            <span style="font-size:13px;line-height:17px;color:var(--wd-muted);${line}">${artist}</span>
+            <span style="font-size:12px;line-height:16px;color:var(--wd-muted);${line}">${meta}</span></div>`;
+        ]]]
+      prev:
+        card:
+          type: custom:button-card
+          template: wd_media_button
+          icon: mdi:skip-previous
+          variables:
+            action: media_player.media_previous_track
+            label: Vorheriger Titel
+      play:
+        card:
+          type: custom:button-card
+          template: wd_media_play
+      next:
+        card:
+          type: custom:button-card
+          template: wd_media_button
+          icon: mdi:skip-next
+          variables:
+            action: media_player.media_next_track
+            label: Nächster Titel
+      vol: |
+        [[[
+          const id = variables.player_id;
+          const vol = Math.round((variables.player?.attributes?.volume_level ?? 0) * 100);
+          const set = (ev) => helpers.runAction({
+            action: 'perform-action',
+            perform_action: 'media_player.volume_set',
+            target: { entity_id: id },
+            data: { volume_level: Number(ev.target.value) / 100 },
+          });
+          return html`<div style="display:flex;align-items:center;gap:10px;height:28px;width:100%">
+            <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px;display:flex;color:var(--wd-muted)"></ha-icon>
+            <input type="range" min="0" max="100" step="1" .value=${String(vol)} @change=${set}
+              @input=${(ev) => ev.target.style.setProperty('--wd-vol', `${ev.target.value}%`)}
+              aria-label="Lautstärke" style="flex:1;min-width:0;height:28px;margin:0;--wd-vol:${vol}%">
+            <span style="width:38px;text-align:right;font-size:12px;font-weight:600;color:var(--wd-muted);
+              font-variant-numeric:tabular-nums">${vol} %</span></div>`;
+        ]]]
+      chips:
+        card:
+          type: custom:button-card
+          template: wd_music_chips
+
+  wd_media_button:
+    template:
+      - wd_base
+      - wd_player
+    show_icon: true
+    tap_action:
+      action: perform-action
+      perform_action: '[[[ return variables.action; ]]]'
+      target:
+        entity_id: '[[[ return variables.player_id; ]]]'
+    styles:
+      card:
+        - width: 40px
+        - height: 44px
+        - border-radius: 22px
+        - cursor: pointer
+      icon:
+        - width: 24px
+        - color: var(--wd-ink)
+
+  wd_media_play:
+    template:
+      - wd_base
+      - wd_player
+    show_icon: true
+    icon: "[[[ return variables.player?.state === 'playing' ? 'mdi:pause' : 'mdi:play'; ]]]"
+    tap_action:
+      action: perform-action
+      perform_action: media_player.media_play_pause
+      target:
+        entity_id: '[[[ return variables.player_id; ]]]'
+    styles:
+      card:
+        - width: 44px
+        - height: 44px
+        - border-radius: 22px
+        - background: var(--wd-play-bg)
+        - cursor: pointer
+      icon:
+        - width: 22px
+        - color: var(--wd-play-fg)
+
+  wd_music_chips:
+    template: wd_base
+    styles:
+      grid:
+        - grid-template-areas: '"living kitchen . search"'
+        - grid-template-columns: auto auto minmax(0, 1fr) 36px
+        - column-gap: 8px
+        - align-items: center
+    custom_fields:
+      living:
+        card:
+          type: custom:button-card
+          template: wd_room_chip
+          variables:
+            speaker: media_player.pulse_flex_living_room_1
+            room: Wohnzimmer
+      kitchen:
+        card:
+          type: custom:button-card
+          template: wd_room_chip
+          variables:
+            speaker: media_player.pulse_flex_kitchen_1
+            room: Küche
+      search:
+        card:
+          type: custom:button-card
+          template: wd_base
+          show_icon: true
+          icon: mdi:magnify
+          tap_action:
+            action: navigate
+            navigation_path: /d5369777_music_assistant
+          styles:
+            card:
+              - width: 36px
+              - height: 36px
+              - border-radius: 18px
+              - border: 1px solid var(--wd-line-strong)
+              - cursor: pointer
+            icon:
+              - width: 18px
+              - color: var(--wd-ink)
+
+  # A speaker in the group shows a check; tapping it takes it out. A speaker
+  # outside the group shows a plus; tapping it joins the active player. The
+  # active player itself opens its details (volume per speaker).
+  wd_room_chip:
+    template:
+      - wd_base
+      - wd_player
+    show_icon: true
+    show_name: true
+    name: '[[[ return variables.room; ]]]'
+    variables:
+      in_group: '[[[ return variables.members.includes(variables.speaker); ]]]'
+      is_active: '[[[ return variables.player_id === variables.speaker; ]]]'
+    icon: "[[[ return variables.in_group ? 'mdi:check' : 'mdi:plus'; ]]]"
+    tap_action: |
+      [[[
+        if (variables.is_active) return { action: 'more-info', entity: variables.speaker };
+        if (variables.in_group) {
+          return { action: 'perform-action', perform_action: 'media_player.unjoin',
+            target: { entity_id: variables.speaker } };
+        }
+        return { action: 'perform-action', perform_action: 'media_player.join',
+          target: { entity_id: variables.player_id }, data: { group_members: [variables.speaker] } };
+      ]]]
+    styles:
+      card:
+        - height: 36px
+        - padding: 0 14px 0 10px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - cursor: pointer
+        - background: "[[[ return variables.in_group ? 'var(--wd-accent-bg)' : 'transparent'; ]]]"
+        - border: "[[[ return variables.in_group ? '1px solid transparent' : '1px solid var(--wd-line-strong)'; ]]]"
+      grid:
+        - grid-template-areas: '"i n"'
+        - grid-template-columns: 16px auto
+        - column-gap: 6px
+      icon:
+        - width: 16px
+        - color: "[[[ return variables.in_group ? 'var(--wd-ink)' : 'var(--wd-muted)'; ]]]"
+      name:
+        - font-size: 13px
+        - font-weight: 700
+        - white-space: nowrap
+
+  # ------------------------------------------------------------ room climate --
+  wd_window_pill:
+    template:
+      - wd_pill
+      - wd_openings
+    name: "[[[ return variables.open_text || 'Alle Fenster zu'; ]]]"
+    styles:
+      card:
+        - background: "[[[ return variables.open_text ? 'var(--wd-warn-bg)' : 'var(--wd-ok-bg)'; ]]]"
+      name:
+        - color: "[[[ return variables.open_text ? 'var(--wd-warn-ink)' : 'var(--wd-ok-ink)'; ]]]"
+
+  # Rooms of the climate section, read from Home Assistant: every area with
+  # the label wall_display_climate and a temperature sensor in its area
+  # settings, in the area order of Home Assistant with the display's own area
+  # first. Openings are the contacts with the label all_windows in that area.
+  wd_climate_rooms:
+    variables:
+      home_area: living_room
+      rooms: |
+        [[[
+          const areaOf = (id) => {
+            const e = hass.entities[id];
+            return e?.area_id || hass.devices[e?.device_id]?.area_id;
+          };
+          const contacts = Object.keys(hass.entities)
+            .filter((id) => (hass.entities[id].labels || []).includes('all_windows'));
+          return Object.values(hass.areas)
+            .filter((a) => (a.labels || []).includes('wall_display_climate') && a.temperature_entity_id)
+            .sort((a, b) => (b.area_id === variables.home_area) - (a.area_id === variables.home_area))
+            .map((a) => {
+              const openings = contacts.filter((id) => areaOf(id) === a.area_id).map((id) => {
+                const s = states[id];
+                const name = s?.attributes.friendly_name || id;
+                if (s?.attributes.device_class !== 'window') return { entity: id, label: name, window: false };
+                const side = name.match(/(links|mitte|rechts)$/);
+                return { entity: id, label: side ? `Fenster ${side[1]}` : 'Fenster', window: true };
+              }).sort((x, y) => (y.window - x.window) || x.label.localeCompare(y.label));
+              const parts = [...new Set(openings.map((o) => (o.window ? 'Fenster' : o.label)))];
+              return {
+                room: a.name,
+                temperature: a.temperature_entity_id,
+                humidity: a.humidity_entity_id,
+                openings,
+                closed_text: parts.length ? `${parts.join(' und ')} zu` : '',
+              };
+            });
+        ]]]
+
+  # Room rows are fixed slots; a slot without a room stays empty.
+  wd_climate_card:
+    template: wd_base
+    styles:
+      card:
+        - padding: 4px 16px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+      grid:
+        - grid-template-areas: '"r0" "r1" "r2" "r3" "r4" "r5" "r6" "r7"'
+        - grid-template-columns: minmax(0, 1fr)
+      custom_fields:
+        r0:
+          - justify-self: stretch
+        r1:
+          - justify-self: stretch
+        r2:
+          - justify-self: stretch
+        r3:
+          - justify-self: stretch
+        r4:
+          - justify-self: stretch
+        r5:
+          - justify-self: stretch
+        r6:
+          - justify-self: stretch
+        r7:
+          - justify-self: stretch
+    custom_fields:
+      r0:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 0
+      r1:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 1
+      r2:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 2
+      r3:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 3
+      r4:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 4
+      r5:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 5
+      r6:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 6
+      r7:
+        card:
+          type: custom:button-card
+          template: wd_climate_row
+          variables:
+            index: 7
+
+  # One room: temperature, humidity and the state of its windows and doors.
+  # variables: index (position in rooms, the first row has no divider).
+  wd_climate_row:
+    template:
+      - wd_base
+      - wd_helpers
+      - wd_climate_rooms
+    entity: '[[[ return variables.slot?.temperature; ]]]'
+    tap_action:
+      action: more-info
+    variables:
+      index: 0
+      slot: '[[[ return variables.rooms[variables.index]; ]]]'
+      open: "[[[ return (variables.slot?.openings || []).filter((o) => states[o.entity]?.state === 'on'); ]]]"
+    styles:
+      card:
+        - display: "[[[ return variables.slot ? 'flex' : 'none'; ]]]"
+        - min-height: 52px
+        - cursor: pointer
+        - border-top: "[[[ return variables.index === 0 ? 'none' : '1px solid var(--wd-line)'; ]]]"
+        - border-radius: 0
+      grid:
+        - grid-template-areas: '"room temp hum" "note temp hum"'
+        - grid-template-columns: minmax(0, 1fr) auto 44px
+        - column-gap: 10px
+        - align-content: center
+      custom_fields:
+        room:
+          - justify-self: start
+          - font-size: 14px
+          - line-height: 18px
+          - font-weight: 700
+        note:
+          - justify-self: start
+          - font-size: 12px
+          - line-height: 16px
+          - color: "[[[ return variables.open.length ? 'var(--wd-warn-ink)' : 'var(--wd-muted)'; ]]]"
+          - font-weight: "[[[ return variables.open.length ? 700 : 500; ]]]"
+        temp:
+          - font-size: 16px
+          - font-weight: 700
+          - font-variant-numeric: tabular-nums
+        hum:
+          - justify-self: end
+          - font-size: 13px
+          - color: var(--wd-muted)
+          - font-variant-numeric: tabular-nums
+    custom_fields:
+      room: '[[[ return variables.slot?.room; ]]]'
+      note: |
+        [[[
+          const open = variables.open;
+          if (!open.length) return variables.slot?.closed_text || '';
+          const first = open.map((o) => states[o.entity].last_changed).sort()[0];
+          return `<span style="display:flex;align-items:center;gap:4px">
+            <ha-icon icon="mdi:window-open-variant" style="--mdc-icon-size:13px;display:flex"></ha-icon>
+            ${open.map((o) => o.label).join(', ')} offen · seit ${variables.since(first)}</span>`;
+        ]]]
+      temp: '[[[ return variables.fmt_temp(states[variables.slot?.temperature]?.state); ]]]'
+      hum: |
+        [[[
+          const h = parseFloat(states[variables.slot?.humidity]?.state);
+          return isNaN(h) ? '–' : `${Math.round(h)} %`;
+        ]]]
+
+  # ----------------------------------------------------------- appliances --
+  wd_devices_pill:
+    template:
+      - wd_pill
+      - wd_appliances
+    name: |
+      [[[
+        const s = variables.appliances.map((a) => variables.appliance_state(a.entity));
+        const running = s.filter((x) => x === 'running').length;
+        if (running) return `${running} läuft`;
+        return s.includes('ready') ? 'Bereit' : 'Alles aus';
+      ]]]
+
+  wd_appliance_tile:
+    template:
+      - wd_base
+      - wd_appliances
+    show_name: true
+    show_icon: true
+    show_state: true
+    tap_action:
+      action: more-info
+    variables:
+      mode: '[[[ return variables.appliance_state(entity.entity_id); ]]]'
+    state_display: |
+      [[[
+        return { running: 'Läuft', ready: 'Bereit', idle: 'Leerlauf', unknown: 'Unbekannt' }[variables.mode];
+      ]]]
+    styles:
+      card:
+        - height: 64px
+        - padding: 0 12px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - cursor: pointer
+        - background: |
+            [[[
+              if (variables.mode === 'running') return 'var(--wd-tile-on)';
+              if (variables.mode === 'ready') return 'var(--wd-ok-bg)';
+              return 'var(--wd-tile-off)';
+            ]]]
+        - border: "[[[ return variables.mode === 'running' ? '1px solid transparent' : '1px solid var(--wd-line)'; ]]]"
+        - box-shadow: "[[[ return variables.mode === 'running' ? 'var(--wd-tile-on-shadow)' : 'none'; ]]]"
+        - color: "[[[ return variables.mode === 'running' ? '#2B2420' : 'var(--wd-ink)'; ]]]"
+      # Explicit rows: button-card's default "1fr min-content" would push the
+      # name and state to the bottom edge of the tile.
+      grid:
+        - grid-template-areas: '"i n" "i s"'
+        - grid-template-columns: 34px minmax(0, 1fr)
+        - grid-template-rows: 18px 16px
+        - column-gap: 10px
+        - align-content: center
+      img_cell:
+        - width: 34px
+        - height: 34px
+        - border-radius: 17px
+        - background: "[[[ return variables.mode === 'running' ? '#A86F43' : 'var(--wd-surface2)'; ]]]"
+      icon:
+        - width: 18px
+        - color: "[[[ return variables.mode === 'running' ? '#FFFFFF' : 'var(--wd-muted)'; ]]]"
+      name:
+        - justify-self: start
+        - align-self: end
+        - font-size: 14px
+        - line-height: 18px
+        - font-weight: 700
+      state:
+        - justify-self: start
+        - align-self: start
+        - font-size: 12px
+        - line-height: 16px
+        - color: "[[[ return variables.mode === 'running' ? '#5B4D44' : 'var(--wd-muted)'; ]]]"
+
+views:
+  - title: Wohnzimmer
+    path: home
+    icon: mdi:home
+    type: panel
+    theme: scandi_beige
+    cards:
+      - type: custom:button-card
+        template: wd_root
+        custom_fields:
+          header:
+            card:
+              type: custom:button-card
+              template: wd_header
+          weather:
+            card:
+              type: custom:button-card
+              template: wd_weather
+          lights:
+            card:
+              type: custom:button-card
+              template: wd_section
+              variables:
+                icon: mdi:lightbulb-outline
+                title: Licht · Wohnzimmer
+              custom_fields:
+                aside:
+                  card:
+                    type: custom:button-card
+                    template: wd_all_off
+                body:
+                  card:
+                    type: grid
+                    columns: 3
+                    square: false
+                    cards:
+                      - type: custom:button-card
+                        template: wd_light_tile
+                        entity: light.living_room_highboard_glass_cabinet
+                        name: Vitrine
+                        icon: mdi:vanity-light
+                      - type: custom:button-card
+                        template: wd_light_tile
+                        entity: light.living_room_diner_table_pendant_lamp
+                        name: Pendel
+                        icon: mdi:ceiling-light-multiple
+                      - type: custom:button-card
+                        template: wd_light_tile
+                        entity: light.living_room_floor_lamp_bulb_1
+                        name: Stehlampe
+                        icon: mdi:floor-lamp
+          music:
+            card:
+              type: custom:button-card
+              template: wd_section
+              variables:
+                icon: mdi:music-note
+                title: Musik
+              custom_fields:
+                aside:
+                  card:
+                    type: custom:button-card
+                    template: wd_music_where
+                body:
+                  card:
+                    type: custom:button-card
+                    template: wd_music
+          climate:
+            card:
+              type: custom:button-card
+              template: wd_section
+              variables:
+                icon: mdi:thermometer
+                title: Raumklima
+              custom_fields:
+                aside:
+                  card:
+                    type: custom:button-card
+                    template: wd_window_pill
+                body:
+                  card:
+                    type: custom:button-card
+                    template: wd_climate_card
+          devices:
+            card:
+              type: conditional
+              conditions:
+                - condition: or
+                  conditions:
+                    - condition: state
+                      entity: input_boolean.washer_running
+                      state: 'on'
+                    - condition: state
+                      entity: input_boolean.dryer_running
+                      state: 'on'
+                    - condition: numeric_state
+                      entity: sensor.laundry_washing_machine_plug_power
+                      above: 5
+                    - condition: numeric_state
+                      entity: sensor.laundry_dryer_plug_power
+                      above: 5
+              card:
+                type: custom:button-card
+                template: wd_section
+                variables:
+                  icon: mdi:washing-machine
+                  title: Geräte
+                custom_fields:
+                  aside:
+                    card:
+                      type: custom:button-card
+                      template: wd_devices_pill
+                  body:
+                    card:
+                      type: grid
+                      columns: 2
+                      square: false
+                      cards:
+                        - type: custom:button-card
+                          template: wd_appliance_tile
+                          entity: sensor.laundry_washing_machine_plug_power
+                          name: Waschmaschine
+                          icon: mdi:washing-machine
+                        - type: custom:button-card
+                          template: wd_appliance_tile
+                          entity: sensor.laundry_dryer_plug_power
+                          name: Trockner
+                          icon: mdi:tumble-dryer
