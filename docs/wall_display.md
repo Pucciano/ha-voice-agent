@@ -13,7 +13,7 @@ From top to bottom:
 |---|---|
 | Header | Clock, date, the initial of every person entity with a home or away badge, one summary line (lights on, open windows and doors, running appliances) |
 | Safety | Red banner per wet leak sensor; amber pill when a leak sensor is offline; green "Alles trocken" otherwise |
-| Weather | Current condition, today's high and low, four days with temperature bars and a dot for the current temperature |
+| Weather | Current condition, today's high and low, today and the next two days with temperature bars and a dot for the current temperature |
 | Licht · Wohnzimmer | Vitrine, Pendel, Stehlampe; "Alle N aus" turns off every counted light in the flat after a confirmation |
 | Musik | Active Bluesound player, play controls, volume, room chips to join or leave the group |
 | Raumklima | Temperature, humidity and window state per room, with the time a window was opened |

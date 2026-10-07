@@ -467,7 +467,7 @@ button_card_templates:
       days: |
         [[[
           states['sensor.time'];
-          return (window.wdForecast || []).slice(0, 4);
+          return (window.wdForecast || []).slice(0, 3);
         ]]]
     styles:
       card:
