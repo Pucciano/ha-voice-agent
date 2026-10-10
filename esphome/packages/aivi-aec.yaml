@@ -1,0 +1,282 @@
+# AIVI satellite: echo canceller package (issue #17)
+#
+# Tunes the XVF3800's echo canceller for audio through the jack
+# (aivi-audio-output.yaml). Echo canceller is AEC below.
+#
+#   AEC-Verzögerung            AUDIO_MGR_SYS_DELAY: samples (16 kHz) the
+#                              XVF3800 delays the reference, -64..256
+#   AEC-Referenzverstärkung    AUDIO_MGR_REF_GAIN: gain of the reference
+#                              Both are kept on the satellite and written at
+#                              boot; until set, the XVF3800 keeps its own
+#                              defaults.
+#   Echounterdrückung          AEC_AECCONVERGED, read every 2 s
+#   eingeschwungen
+#   Selbsttest starten         about 35 s of noise and tones through the jack,
+#   Selbsttest abbrechen       recorded by the XVF3800. Needs "Klinke" as the
+#                              output; the room should be quiet.
+#   Selbsttest Status, Ergebnis, Frequenzbänder, Hinweise
+#   Echo-Verzögerung, Nachhallzeit, Echodämpfung, Echo-Abstand zur Referenz
+#
+# The self test measures the echo delay, the echo path per band, the
+# reverberation time and the echo attenuation (see
+# esphome/components/aec_tuning/analysis.h), then sets AEC-Verzögerung and
+# AEC-Referenzverstärkung. Levels it only recommends (Hinweise): they also
+# change what the wake word and speech recognition hear.
+#
+# Events to Home Assistant, each with the satellite_id:
+#   esphome.aivi_self_test   phase start, done (with all values) or error
+#
+# Requires aivi-audio-output.yaml (self_test_mixing_input, aivi_player,
+# stop_local_audio), aivi-voice-input.yaml (assistant_paused, va),
+# aivi-leds.yaml (self_test_running, recording_mode) and aivi-xvf3800.yaml.
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [aec_tuning]
+
+esphome:
+  includes:
+    - packages/aivi-aec.h
+  on_boot:
+    - priority: -100
+      then:
+        - text_sensor.template.publish:
+            id: self_test_status
+            state: Bereit
+
+aec_tuning:
+  id: aec
+  respeaker_id: respeaker
+  speaker: self_test_mixing_input
+  microphone:
+    microphone: i2s_mics
+    channels: [0, 1]
+  on_status:
+    - lambda: id(self_test_status).publish_state(aivi_aec::status_text(status));
+    - if:
+        condition:
+          lambda: return status == "done";
+        then:
+          - lambda: |-
+              const auto &r = id(aec).results();
+              id(self_test_summary).publish_state(aivi_aec::summary(r));
+              id(self_test_bands).publish_state(aivi_aec::bands(r));
+              id(self_test_hints).publish_state(aivi_aec::hints(r));
+              id(echo_delay).publish_state(r.delay_ms);
+              id(reverberation_time).publish_state(r.rt60_ms);
+              id(echo_attenuation).publish_state(r.erle_db);
+              id(echo_to_reference).publish_state(r.echo_to_ref_db);
+          - component.update: aec_sys_delay
+          - component.update: aec_ref_gain
+          - homeassistant.event:
+              event: esphome.aivi_self_test
+              data:
+                satellite_id: ${satellite_id}
+                phase: done
+                summary: !lambda return aivi_aec::summary(id(aec).results());
+                bands: !lambda return aivi_aec::bands(id(aec).results());
+                hints: !lambda return aivi_aec::hints(id(aec).results());
+                delay_ms: !lambda return aivi_aec::num(id(aec).results().delay_ms, 2);
+                delay_spread_samples: !lambda return std::to_string(id(aec).results().delay_spread);
+                switch_ms: !lambda return aivi_aec::num(id(aec).results().switch_ms);
+                sys_delay_old: !lambda return std::to_string(id(aec).results().sys_delay_old);
+                sys_delay_new: !lambda return std::to_string(id(aec).results().sys_delay_new);
+                ref_gain_old: !lambda return aivi_aec::num(id(aec).results().ref_gain_old, 3);
+                ref_gain_new: !lambda return aivi_aec::num(id(aec).results().ref_gain_new, 3);
+                residual_ms: !lambda return aivi_aec::num(id(aec).results().residual_ms, 1);
+                echo_to_ref_db: !lambda return aivi_aec::num(id(aec).results().echo_to_ref_db, 1);
+                rt60_ms: !lambda return aivi_aec::num(id(aec).results().rt60_ms);
+                tail_coverage_db: !lambda return aivi_aec::num(id(aec).results().tail_coverage_db, 1);
+                erle_db: !lambda return aivi_aec::num(id(aec).results().erle_db, 1);
+                erle_band_db: !lambda return aivi_aec::num(id(aec).results().erle_band_db, 1);
+                converged: !lambda 'return id(aec).results().converged ? "true" : "false";'
+                warnings: !lambda return std::to_string(id(aec).results().warnings);
+    - if:
+        condition:
+          lambda: return status.rfind("error:", 0) == 0;
+        then:
+          - homeassistant.event:
+              event: esphome.aivi_self_test
+              data:
+                satellite_id: ${satellite_id}
+                phase: error
+                error: !lambda return status.substr(6);
+    - if:
+        condition:
+          lambda: return status == "done" || status.rfind("error:", 0) == 0;
+        then:
+          - lambda: |-
+              id(assistant_paused) = false;
+              id(self_test_running) = false;
+
+number:
+  - platform: template
+    id: aec_sys_delay
+    name: AEC-Verzögerung
+    icon: mdi:timer-sand
+    entity_category: config
+    unit_of_measurement: Samples
+    mode: box
+    min_value: -64
+    max_value: 256
+    step: 1
+    update_interval: 10s
+    lambda: return id(aec).sys_delay();
+    set_action:
+      - lambda: id(aec).set_sys_delay(x);
+      - component.update: aec_sys_delay
+  - platform: template
+    id: aec_ref_gain
+    name: AEC-Referenzverstärkung
+    icon: mdi:tune-vertical
+    entity_category: config
+    mode: box
+    min_value: 0.1
+    max_value: 8
+    step: 0.01
+    update_interval: 10s
+    lambda: return id(aec).ref_gain();
+    set_action:
+      - lambda: id(aec).set_ref_gain(x);
+      - component.update: aec_ref_gain
+
+binary_sensor:
+  - platform: template
+    name: Echounterdrückung eingeschwungen
+    icon: mdi:waveform
+    entity_category: diagnostic
+    lambda: |-
+      const int converged = id(aec).converged();
+      if (converged < 0)
+        return {};
+      return converged == 1;
+
+script:
+  - id: self_test_start
+    mode: single
+    then:
+      - lambda: |-
+          id(assistant_paused) = true;
+          id(self_test_running) = true;
+      - script.execute: stop_local_audio
+      - media_player.stop: aivi_player
+      - text_sensor.template.publish:
+          id: self_test_status
+          state: "Läuft: Lautsprecher auf Analogeingang"
+      # The automation "AIVI Klinkenausgang" switches the room speaker to its
+      # analog input; the test then waits for the echo of its pilot tone.
+      - homeassistant.event:
+          event: esphome.aivi_self_test
+          data:
+            satellite_id: ${satellite_id}
+            phase: start
+      - delay: 2s
+      - if:
+          condition:
+            lambda: return !id(aec).start_self_test();
+          then:
+            - lambda: |-
+                id(assistant_paused) = false;
+                id(self_test_running) = false;
+
+button:
+  - platform: template
+    name: Selbsttest starten
+    icon: mdi:sine-wave
+    entity_category: config
+    on_press:
+      - lambda: |-
+          const char *reason = nullptr;
+          if (id(aec).self_test_running() || id(self_test_start).is_running())
+            reason = "läuft bereits";
+          else if (!id(audio_on_jack))
+            reason = "Audioausgabe auf Klinke stellen";
+          else if (id(mic_mute_switch).state)
+            reason = "Mikrofon ist stumm";
+          else if (id(va).is_running())
+            reason = "Assistent arbeitet gerade";
+          else if (id(recording_mode) != 0)
+            reason = "Wake-Word-Aufnahme läuft";
+          else if (!id(api_id).is_connected())
+            reason = "Home Assistant nicht verbunden";
+          if (reason != nullptr) {
+            id(self_test_status).publish_state(std::string("Nicht gestartet: ") + reason);
+            return;
+          }
+          id(self_test_start).execute();
+  - platform: template
+    name: Selbsttest abbrechen
+    icon: mdi:stop
+    entity_category: config
+    on_press:
+      - lambda: |-
+          if (id(aec).self_test_running()) {
+            id(aec).abort_self_test();
+          } else if (id(self_test_start).is_running()) {
+            id(self_test_start).stop();
+            id(assistant_paused) = false;
+            id(self_test_running) = false;
+            id(self_test_status).publish_state("Abgebrochen");
+          }
+
+text_sensor:
+  - platform: template
+    id: self_test_status
+    name: Selbsttest Status
+    icon: mdi:sine-wave
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: self_test_summary
+    name: Selbsttest Ergebnis
+    icon: mdi:clipboard-text-outline
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: self_test_bands
+    name: Selbsttest Frequenzbänder
+    icon: mdi:equalizer
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: self_test_hints
+    name: Selbsttest Hinweise
+    icon: mdi:lightbulb-outline
+    entity_category: diagnostic
+    update_interval: never
+
+sensor:
+  - platform: template
+    id: echo_delay
+    name: Echo-Verzögerung
+    icon: mdi:timer-sand
+    unit_of_measurement: ms
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: reverberation_time
+    name: Nachhallzeit
+    icon: mdi:waves
+    unit_of_measurement: ms
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: echo_attenuation
+    name: Echodämpfung
+    icon: mdi:volume-minus
+    unit_of_measurement: dB
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: echo_to_reference
+    name: Echo-Abstand zur Referenz
+    icon: mdi:compare-vertical
+    unit_of_measurement: dB
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: never

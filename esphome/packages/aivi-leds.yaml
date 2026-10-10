@@ -12,6 +12,8 @@
 #   recording   a light circles while a wake word take runs: green for
 #               "Hey AIVI", red for everyday sound (recording_mode, set by
 #               aivi-wake-word-recording.yaml)
+#   self test   a white light circles while the echo canceller self test
+#               runs (self_test_running, set by aivi-aec.yaml)
 #   not ready   orange blink while Wi-Fi or Home Assistant is disconnected
 #   idle        off
 # The driver skips unchanged frames, so a steady ring costs no I2C traffic.
@@ -30,6 +32,9 @@ globals:
   - id: recording_mode
     type: int
     initial_value: "0"
+  - id: self_test_running
+    type: bool
+    initial_value: "false"
 
 respeaker_xvf3800:
   led_beam_sensor:
@@ -90,6 +95,14 @@ interval:
               float behind = head - i;
               if (behind < 0) behind += N;
               if (behind < 4.0f) frame[i] = rgb(64, 128, 255, 0.5f * (1.0f - behind / 4.0f));
+            }
+          } else if (id(self_test_running)) {
+            // A light with a short tail, one lap per second.
+            const float head = (now % 1000) * N / 1000.0f;
+            for (int i = 0; i < N; i++) {
+              float behind = head - i;
+              if (behind < 0) behind += N;
+              if (behind < 3.0f) frame[i] = rgb(96, 96, 96, 1.0f - behind / 3.0f);
             }
           } else if (id(recording_mode) != 0) {
             // A light with a short tail, one lap every two seconds.

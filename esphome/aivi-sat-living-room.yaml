@@ -17,6 +17,7 @@ packages:
   xvf3800: !include packages/aivi-xvf3800.yaml
   voice_input: !include packages/aivi-voice-input.yaml
   audio_output: !include packages/aivi-audio-output.yaml
+  aec: !include packages/aivi-aec.yaml
   leds: !include packages/aivi-leds.yaml
   diagnostics: !include packages/aivi-diagnostics.yaml
   wake_word_recording: !include packages/aivi-wake-word-recording.yaml
