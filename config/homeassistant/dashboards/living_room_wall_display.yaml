@@ -898,15 +898,25 @@ button_card_templates:
         [[[
           const id = variables.player_id;
           const vol = Math.round((variables.player?.attributes?.volume_level ?? 0) * 100);
-          const set = (ev) => helpers.runAction({
-            action: 'perform-action',
-            perform_action: 'media_player.volume_set',
-            target: { entity_id: id },
-            data: { volume_level: Number(ev.target.value) / 100 },
-          });
+          // The Shelly app takes over horizontal swipes and cancels the touch
+          // in the web view, so a drag ends without a change event. Send on
+          // touchend and touchcancel as well, once per value.
+          const set = (ev) => {
+            const v = Number(ev.target.value);
+            const key = `${vol}>${v}`;
+            if (v === vol || ev.target.wdSent === key) return;
+            ev.target.wdSent = key;
+            helpers.runAction({
+              action: 'perform-action',
+              perform_action: 'media_player.volume_set',
+              target: { entity_id: id },
+              data: { volume_level: v / 100 },
+            });
+          };
           return html`<div style="display:flex;align-items:center;gap:10px;height:28px;width:100%">
             <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px;display:flex;color:var(--wd-muted)"></ha-icon>
-            <input type="range" min="0" max="100" step="1" .value=${String(vol)} @change=${set}
+            <input type="range" min="0" max="100" step="1" .value=${String(vol)}
+              @change=${set} @touchend=${set} @touchcancel=${set}
               @input=${(ev) => ev.target.style.setProperty('--wd-vol', `${ev.target.value}%`)}
               aria-label="Lautstärke" style="flex:1;min-width:0;height:28px;margin:0;--wd-vol:${vol}%">
             <span style="width:38px;text-align:right;font-size:12px;font-weight:600;color:var(--wd-muted);
