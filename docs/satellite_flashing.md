@@ -212,10 +212,14 @@ reference.
    `Hide source` off. Home Assistant reads the speaker's inputs every
    15 minutes, so it can take that long until `Analog Input` appears in the
    speaker's source list.
-   Also in the BluOS app, under Settings > Player: switch `Amplifier Standby`
-   off. With it on, the speaker puts its amplifier to sleep after 15 minutes
-   without playback, and waking it takes 5-15 seconds (Bluesound support),
-   long enough to swallow the start of an answer.
+   `Amplifier Standby` (BluOS app, Settings > Player) can stay on: the
+   speaker puts its amplifier to sleep after 15 minutes without playback,
+   and waking it takes 5-15 seconds (Bluesound support), but the selected
+   analog input counts as playback. Measured on the living room Pulse Flex:
+   after 30 minutes of silence on the analog input it played the self
+   test's pilot at once. Only a speaker that was stopped or paused for
+   15 minutes before a wake word may swallow the start of the answer; if
+   that happens, switch `Amplifier Standby` off.
 2. Add the room to `config/homeassistant/aivi_jack_output.yaml`
    (`AIVI Klinkenausgang`): an entry under `rooms` with the satellite's device
    id, its `Audioausgabe` select and `Audioausgang` media player, the speaker,

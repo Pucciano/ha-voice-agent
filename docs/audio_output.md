@@ -55,8 +55,10 @@ BluOS has no Auto Sense for analog inputs, so Home Assistant selects the
 input. Selecting it starts a continuous stream at once, signal or not. The
 input has no gain, automatic level or compressor, so the echo path stays
 linear. With `Amplifier Standby` on, the Pulse Flex sleeps its amplifier
-after 15 minutes without playback and needs 5-15 seconds to wake; switch it
-off for a speaker on the jack.
+after 15 minutes without playback and needs 5-15 seconds to wake. The
+selected analog input counts as playback, even when silent: after 30 minutes
+of silence the living room speaker played at once. Only a speaker that was
+stopped or paused before the wake word can swallow the start of an answer.
 
 While the jack route is active, the speaker keeps a fixed volume, because the
 echo canceller needs a constant echo path; the loudness is set on the
@@ -94,7 +96,7 @@ or the evaluation scripts before investigating the audio chain.
 If answers through the jack stay silent, check that `Analog Input` is in the
 speaker's source list (BluOS `Hide source` off) and look for warnings of the
 logger `aivi_jack_output` in the Home Assistant log. If only the start of an
-answer is missing, the speaker's amplifier was in standby: switch BluOS
-`Amplifier Standby` off. Network answers still play nothing while the
+answer is missing, the speaker's amplifier was in standby (it had been
+stopped or paused): switch BluOS `Amplifier Standby` off. Network answers still play nothing while the
 speaker is grouped with another room; the jack route takes the speaker out
 of its group.
