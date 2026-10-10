@@ -34,6 +34,13 @@ On the display, under **Settings → Network → Home Assistant**:
 - The display logs in as the HA user "Shelly Wall Display" (username
   `shelly`, no admin rights, local only).
 
+In the HA profile of that user, **Dashboard** is set to "Bedienfeld". The
+frontend picks the start dashboard from the user setting first, then from
+the system-wide default (Settings → Dashboards), then from the default stored
+in the browser. A per-device choice therefore loses against the system-wide
+default as soon as one is set, and the display starts with "Übersicht" after
+a reboot.
+
 Tested with firmware 2.7.0. Firmware 2.6.0 marked the built-in Home Assistant
 page as deprecated in favour of an app from the Shelly app store, and 2.7.0
 reverted that. Keep using the built-in page: the bottom bar setting only
@@ -160,6 +167,8 @@ Shelly app; both are open to the whole network otherwise.
 | Symptom | Cause |
 |---|---|
 | HA header and sidebar visible | kiosk-mode `users` does not match the display name of the logged-in user |
+| Display starts with "Übersicht" after a reboot | The profile of the display user has **Dashboard** on "Auto"; set it to "Bedienfeld" |
+| Volume follows a drag on the slider, but the speaker does not change | The Shelly app takes over horizontal swipes and cancels the touch, so no `change` event fires; the slider therefore also sends on `touchend` and `touchcancel` |
 | "Vorhersage wird geladen …" | The daily forecast arrives through a websocket subscription; it shows within a minute. If it stays, check that `weather.dwd` exists and has a forecast |
 | Summary counts too many lights | A group member lacks the label `light_count_exclude` |
 | Music card controls the wrong speaker | Check `sensor.active_media_player` in the developer tools |
