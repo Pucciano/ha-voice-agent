@@ -23,10 +23,13 @@ CLIPPING = 1 << 2
 ECHO_LOUD = 1 << 3
 REVERB_LONG = 1 << 4
 LOW_ERLE = 1 << 7
+REF_CLIPPED = 1 << 8
 
-# The simulator's XVF3800 starts with these values.
-SYS_DELAY_BEFORE = -32
-REF_GAIN_BEFORE = 1.5
+# The simulator's XVF3800 starts with the values of formatBCE's firmware.
+SYS_DELAY_BEFORE = -30
+REF_GAIN_BEFORE = 8.0
+# A full-scale signal should reach -2 dBFS after REF_GAIN.
+TARGET_GAIN = 10 ** (-2 / 20)
 
 
 @pytest.fixture(scope="session")
@@ -76,11 +79,9 @@ def test_bluesound_like_room(simulator) -> None:
     assert r["warnings"] & DELAY_CLAMPED
     assert r["residual_ms"] == pytest.approx((880 - 256) / 16, abs=0.2)
     assert r["usable_tail_ms"] == pytest.approx(192 - (880 - 256) / 16, abs=0.2)
-    # The simulated reference path is the gain alone (+3.5 dB at 1.5): a
-    # full-scale signal should reach -2 dBFS.
-    assert r["ref_gain_new"] == pytest.approx(
-        REF_GAIN_BEFORE * 10 ** ((-2 - 20 * 0.17609) / 20), rel=0.03
-    )
+    # The simulated reference path has no gain of its own.
+    assert r["ref_gain_old"] == pytest.approx(REF_GAIN_BEFORE)
+    assert r["ref_gain_new"] == pytest.approx(TARGET_GAIN, rel=0.03)
     assert r["final_ref_gain"] == pytest.approx(r["ref_gain_new"])
     assert r["echo_to_ref_db"] < -6
     assert not r["warnings"] & (CLIPPING | ECHO_LOUD | LOW_ERLE)
@@ -98,6 +99,33 @@ def test_sys_delay_keeps_24_samples_of_margin(simulator, delay, sys_delay) -> No
     assert abs(r["delay_samples"] - delay) <= 2
     assert r["sys_delay_new"] == pytest.approx(sys_delay, abs=2)
     assert bool(r["warnings"] & DELAY_CLAMPED) == (delay - 24 > 256)
+
+
+@pytest.mark.parametrize(
+    ("path_db", "before", "expected"),
+    [
+        # An attenuated reference path needs more gain.
+        (-12, 8.0, TARGET_GAIN * 10 ** (12 / 20)),
+        # Less than 1 dB off: the gain stays.
+        (0, 0.8, 0.8),
+        # More than the maximum: capped at 8.
+        (-24, 1.0, 8.0),
+    ],
+)
+def test_reference_gain(simulator, path_db, before, expected) -> None:
+    r = run(simulator, "--ref-path-db", path_db, "--ref-gain", before)
+    assert r["step"] == "done"
+    assert r["ref_gain_new"] == pytest.approx(expected, rel=0.03)
+    assert r["final_ref_gain"] == pytest.approx(r["ref_gain_new"])
+
+
+def test_clipping_reference_keeps_the_gain(simulator) -> None:
+    # +10 dB in the path: the -6 dBFS tones clip even at REF_GAIN 1.
+    r = run(simulator, "--ref-path-db", 10)
+    assert r["step"] == "done"
+    assert r["ref_clipped"]
+    assert r["warnings"] & REF_CLIPPED
+    assert r["ref_gain_new"] == pytest.approx(REF_GAIN_BEFORE)
 
 
 @pytest.mark.parametrize("rt60", [250, 400, 600, 800])

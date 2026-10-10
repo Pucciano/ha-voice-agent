@@ -7,7 +7,8 @@
 // mixer) and listens to two XVF3800 output channels (16 kHz stereo):
 //
 //   phase A  L = microphone 0 after gain, R = reference after gain, with
-//            AUDIO_MGR_SYS_DELAY at 0
+//            AUDIO_MGR_SYS_DELAY at 0 and AUDIO_MGR_REF_GAIN at 1 (formatBCE's
+//            firmware ships 8, which would clip the test signal)
 //     floor    1 s silence: noise floor per band
 //     pilot    1 kHz until the microphone hears it (the room speaker may
 //              still be switching to its analog input)
@@ -56,8 +57,9 @@ constexpr int kDelayMargin = 24;
 constexpr int kMaxSpread = 16;  // delay spread over the bursts, samples
 // XMOS: the post-gain reference as high as possible, with 1-2 dB headroom.
 constexpr float kRefTargetDbfs = -2.0f;
+constexpr float kMeasureRefGain = 1.0f;  // during phase A
 constexpr float kRefGainMin = 0.25f;
-constexpr float kRefGainMax = 4.0f;
+constexpr float kRefGainMax = 8.0f;
 constexpr float kRefGainStepDb = 1.0f;  // smaller changes are not applied
 // XMOS: the microphone should peak at least 6 dB below the reference.
 constexpr float kEchoToRefMaxDb = -6.0f;
@@ -136,7 +138,8 @@ enum class Step : uint8_t {
 enum class Action : uint8_t {
   NONE,
   SETUP_A,         // read SYS_DELAY and REF_GAIN (set_current_tuning), save
-                   // the output mux, then SYS_DELAY 0, L (3,0), R (5,0)
+                   // the output mux, then SYS_DELAY 0, REF_GAIN
+                   // kMeasureRefGain, L (3,0), R (5,0)
   SETUP_B,         // SYS_DELAY and REF_GAIN from the results, R (7,0)
   READ_CONVERGED,  // AEC_AECCONVERGED (set_converged)
   RESTORE_MUX,     // the saved output mux
@@ -163,6 +166,7 @@ enum Warning : uint32_t {
   WARN_LOW_SNR = 1 << 5,         // a band too quiet for a reverberation time
   WARN_NOT_CONVERGED = 1 << 6,
   WARN_LOW_ERLE = 1 << 7,        // under 10 dB
+  WARN_REF_CLIPPED = 1 << 8,     // the reference clipped: REF_GAIN not changed
 };
 
 struct BandResult {
@@ -190,6 +194,7 @@ struct Results {
   float mic_peak_dbfs{NAN};
   float echo_to_ref_db{NAN};  // peaks, with the new reference gain
   bool clipped{false};
+  bool ref_clipped{false};
   int sys_delay_old{0};
   int sys_delay_new{0};
   float ref_gain_old{NAN};
@@ -682,8 +687,12 @@ class Engine {
     input_frames_++;
     step_frames_++;
 
-    if (std::abs(static_cast<int>(l)) >= 32500 && (step_ == Step::MEASURE_A))
-      results_.clipped = true;
+    if (step_ == Step::MEASURE_A) {
+      if (std::abs(static_cast<int>(l)) >= 32500)
+        results_.clipped = true;
+      if (std::abs(static_cast<int>(r)) >= 32500)
+        results_.ref_clipped = true;
+    }
 
     if (step_ == Step::MEASURE_A)
       capture_burst_(l, r);
@@ -1043,25 +1052,27 @@ class Engine {
     res.mic_peak_dbfs = to_db(static_cast<double>(mic_peak) * mic_peak / (32768.0 * 32768.0));
 
     // Reference gain: a full-scale signal should reach kRefTargetDbfs. The
-    // tones have a known level, so the gain of the whole reference path
-    // follows from their steady level, even if peaks clip. (The noise is no
+    // tones have a known level, so the gain of the reference path (measured
+    // at kMeasureRefGain) follows from their steady level. (The noise is no
     // measure: the XVF3800 drops its share above 8 kHz.)
     std::vector<float> path;
     for (size_t k = 2; k <= 4; k++)
       path.push_back(res.bands[k].ref_dbfs - tone_dbfs(kTonePeak));
     const float path_db = median(path);
-    if (std::isfinite(path_db) && std::isfinite(res.ref_gain_old) && res.ref_gain_old > 0.0f) {
-      const float change_db = kRefTargetDbfs - path_db;
-      if (std::fabs(change_db) >= kRefGainStepDb) {
-        const float wanted = res.ref_gain_old * std::pow(10.0f, change_db / 20.0f);
-        res.ref_gain_new = std::max(kRefGainMin, std::min(kRefGainMax, wanted));
-      }
+    if (res.ref_clipped) {
+      res.warnings |= WARN_REF_CLIPPED;
+    } else if (std::isfinite(path_db) && std::isfinite(res.ref_gain_old) && res.ref_gain_old > 0.0f) {
+      const float wanted = std::max(
+          kRefGainMin, std::min(kRefGainMax, kMeasureRefGain * std::pow(10.0f, (kRefTargetDbfs - path_db) / 20.0f)));
+      if (std::fabs(20.0f * std::log10(wanted / res.ref_gain_old)) >= kRefGainStepDb)
+        res.ref_gain_new = wanted;
     }
-    const float gain_change_db =
-        std::isfinite(res.ref_gain_new) && std::isfinite(res.ref_gain_old) && res.ref_gain_old > 0.0f
-            ? 20.0f * std::log10(res.ref_gain_new / res.ref_gain_old)
-            : 0.0f;
-    res.echo_to_ref_db = res.mic_peak_dbfs - (res.ref_peak_dbfs + gain_change_db);
+    // The reference was measured at kMeasureRefGain; compare with the gain
+    // that stays.
+    const float gain_db = std::isfinite(res.ref_gain_new) && res.ref_gain_new > 0.0f
+                              ? 20.0f * std::log10(res.ref_gain_new / kMeasureRefGain)
+                              : 0.0f;
+    res.echo_to_ref_db = res.mic_peak_dbfs - (res.ref_peak_dbfs + gain_db);
     if (res.echo_to_ref_db > kEchoToRefMaxDb)
       res.warnings |= WARN_ECHO_LOUD;
     if (res.clipped)

@@ -8,7 +8,7 @@
 // as the aec_tuning component does on the device. Prints the results as JSON.
 //
 //   room_simulator [--delay N] [--rt60 MS] [--echo-db DB] [--erle DB]
-//                  [--noise-dbfs DB] [--ref-gain G] [--sys-delay N]
+//                  [--noise-dbfs DB] [--ref-gain G] [--sys-delay N] [--ref-path-db DB]
 //                  [--latency-ms MS] [--switch-ms MS] [--unstable]
 //                  [--no-reference] [--no-echo] [--abort-ms MS]
 
@@ -33,8 +33,9 @@ struct Options {
   float echo_db = -18.0f;     // direct echo at the microphone, relative to the reference
   float erle_db = 20.0f;
   float noise_dbfs = -60.0f;  // microphone noise, RMS
-  float ref_gain = 1.5f;      // AUDIO_MGR_REF_GAIN before the test
-  int sys_delay = -32;
+  float ref_gain = 8.0f;      // AUDIO_MGR_REF_GAIN before the test (formatBCE firmware)
+  int sys_delay = -30;
+  float ref_path_db = 0.0f;   // gain from the generator to the reference, before REF_GAIN
   float latency_ms = 250.0f;  // generator to reference
   float switch_ms = 0.0f;     // speaker silent this long after the first reference
   bool unstable = false;      // the echo delay grows by 80 samples per burst
@@ -56,6 +57,7 @@ Options parse(int argc, char **argv) {
     else if (arg == "--ref-gain") o.ref_gain = next();
     else if (arg == "--sys-delay") o.sys_delay = static_cast<int>(next());
     else if (arg == "--latency-ms") o.latency_ms = next();
+    else if (arg == "--ref-path-db") o.ref_path_db = next();
     else if (arg == "--switch-ms") o.switch_ms = next();
     else if (arg == "--abort-ms") o.abort_ms = next();
     else if (arg == "--unstable") o.unstable = true;
@@ -177,6 +179,7 @@ int main(int argc, char **argv) {
   const double noise_rms = 32768.0 * std::pow(10.0, o.noise_dbfs / 20.0);
   const double echo_gain = std::pow(10.0, o.echo_db / 20.0);
   const double residual_gain = std::pow(10.0, -o.erle_db / 20.0);
+  const double ref_path = std::pow(10.0, o.ref_path_db / 20.0);
 
   const size_t latency = static_cast<size_t>(o.latency_ms * kInRate / 1000.0f);
   std::deque<double> output_path(latency, 0.0);  // generator at 16 kHz, before the XVF3800
@@ -195,6 +198,7 @@ int main(int argc, char **argv) {
       case Action::SETUP_A:
         engine.set_current_tuning(sys_delay, ref_gain);
         sys_delay = 0;
+        ref_gain = kMeasureRefGain;
         mux = Mux::PHASE_A;
         engine.action_done(true);
         break;
@@ -259,7 +263,7 @@ int main(int argc, char **argv) {
       double left = mic, right = 0.0;
       switch (mux) {
         case Mux::PHASE_A:
-          right = reference * ref_gain;
+          right = reference * ref_path * ref_gain;
           break;
         case Mux::PHASE_B:
           right = room * residual_gain + noise_rms * gauss(rng);
@@ -313,9 +317,10 @@ int main(int argc, char **argv) {
   std::printf("\"echo_wait_ms\":%s,\"switch_ms\":%s,\"residual_ms\":%s,\"usable_tail_ms\":%s,",
               num(r.echo_wait_ms).c_str(), num(r.switch_ms).c_str(), num(r.residual_ms).c_str(),
               num(r.usable_tail_ms).c_str());
-  std::printf("\"ref_peak_dbfs\":%s,\"mic_peak_dbfs\":%s,\"echo_to_ref_db\":%s,\"clipped\":%s,",
+  std::printf("\"ref_peak_dbfs\":%s,\"mic_peak_dbfs\":%s,\"echo_to_ref_db\":%s,\"clipped\":%s,"
+              "\"ref_clipped\":%s,",
               num(r.ref_peak_dbfs).c_str(), num(r.mic_peak_dbfs).c_str(), num(r.echo_to_ref_db).c_str(),
-              r.clipped ? "true" : "false");
+              r.clipped ? "true" : "false", r.ref_clipped ? "true" : "false");
   std::printf("\"rt60_ms\":%s,\"tail_coverage_db\":%s,\"erle_db\":%s,\"erle_band_db\":%s,\"converged\":%s,",
               num(r.rt60_ms).c_str(), num(r.tail_coverage_db).c_str(), num(r.erle_db).c_str(),
               num(r.erle_band_db).c_str(), r.converged ? "true" : "false");

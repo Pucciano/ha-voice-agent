@@ -256,6 +256,8 @@ void AecTuning::run_action_() {
         this->ref_gain_before_ = ref_gain;
         this->engine_.set_current_tuning(sys_delay, ref_gain);
         ok = xvf::write_int32(this->respeaker_, xvf::kAudioMgrResid, xvf::kAudioMgrSysDelay, 0) &&
+             xvf::write_float(this->respeaker_, xvf::kAudioMgrResid, xvf::kAudioMgrRefGain,
+                              aec_self_test::kMeasureRefGain) &&
              xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpLeft, {xvf::kMuxMicPostGain, 0}) &&
              xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpRight, {xvf::kMuxRefPostGain, 0});
       }
@@ -265,9 +267,9 @@ void AecTuning::run_action_() {
       break;
     }
     case Action::SETUP_B:
+      // ref_gain_new is the gain before the test unless the test changed it.
       ok = xvf::write_int32(this->respeaker_, xvf::kAudioMgrResid, xvf::kAudioMgrSysDelay, res.sys_delay_new) &&
-           (!std::isfinite(res.ref_gain_new) ||
-            xvf::write_float(this->respeaker_, xvf::kAudioMgrResid, xvf::kAudioMgrRefGain, res.ref_gain_new)) &&
+           xvf::write_float(this->respeaker_, xvf::kAudioMgrResid, xvf::kAudioMgrRefGain, res.ref_gain_new) &&
            xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpRight, {xvf::kMuxAecResidual, 0});
       break;
     case Action::READ_CONVERGED: {

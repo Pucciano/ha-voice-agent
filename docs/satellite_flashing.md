@@ -132,7 +132,8 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
 - `Audioausgabe` reads the room speaker's name (answers over the network), and
   Home Assistant lists the media player `Audioausgang`. `AEC-Verzögerung` and
   `AEC-Referenzverstärkung` show the XVF3800's own values until the self test
-  or someone sets them; `Selbsttest Status` reads `Bereit`.
+  or someone sets them (formatBCE's firmware 1.0.7: -30 and 8.0);
+  `Selbsttest Status` reads `Bereit`.
 
 Each detection logs `Detected 'Okay Nabu' with sliding average probability is
 … and max probability is …`. The average is taken at the moment it crosses the
@@ -265,7 +266,7 @@ change of the speaker's volume:
 |---|---|
 | `Echo-Verzögerung` | Time from the reference to the echo at the microphone. Behind a Bluesound analog input a little more than its 50 ms; it should not change between runs. |
 | `AEC-Verzögerung` | Set to the delay minus 24 samples, at most 256 (16 ms). The rest stays inside the 192 ms echo filter. |
-| `AEC-Referenzverstärkung` | Set so a full-scale signal reaches -2 dBFS in the XVF3800 (XMOS: as high as possible, 1-2 dB headroom). |
+| `AEC-Referenzverstärkung` | Set so a full-scale signal reaches -2 dBFS in the XVF3800 (XMOS: as high as possible, 1-2 dB headroom), between 0.25 and 8. The test measures at 1.0, because formatBCE's 8.0 would clip its tones. |
 | `Echo-Abstand zur Referenz` | Echo peak at the microphone relative to the reference peak. XMOS wants at least 6 dB below; above that, lower `Audioausgang`. |
 | `Nachhallzeit` | RT60, median of the 500 Hz to 2 kHz bands. |
 | `Echodämpfung` | Echo attenuation (ERLE) after 4 s of adaptation, broadband. |

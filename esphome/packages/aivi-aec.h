@@ -114,6 +114,8 @@ inline std::string hints(const Results &r) {
     add("Echounterdrückung nicht eingeschwungen");
   if (r.warnings & aec_self_test::WARN_LOW_ERLE)
     add("Echodämpfung unter 10 dB");
+  if (r.warnings & aec_self_test::WARN_REF_CLIPPED)
+    add("Referenz übersteuert, REF_GAIN bleibt");
   return fit(text.empty() ? "Keine" : text);
 }
 
