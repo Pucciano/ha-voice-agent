@@ -2,6 +2,12 @@
 # the speaker of its room (plan phases 6 and 7). It is deployed through the
 # automation config API; keep this copy and Home Assistant in sync.
 #
+# Only answers for the room speaker: with the satellite's "Audioausgabe" set
+# to "Klinke" the event carries output "jack", the satellite plays the answer
+# itself through its jack, and aivi_jack_output.yaml switches the speaker to
+# its analog input. Events without output come from older firmware and play
+# here.
+#
 # Fail closed. Nothing plays unless all of these hold:
 # - the satellite_id is listed and the event comes from that satellite's device
 # - the URL points to Home Assistant's TTS proxy
@@ -36,6 +42,9 @@ variables:
   # http://<host>/api/tts_proxy/<token>.mp3 -> /api/tts_proxy/<token>.mp3
   tts_path: "{{ trigger.event.data.uri | default('') | regex_replace('^https?://[^/]+', '') }}"
 conditions:
+  - alias: Answer goes to the room speaker
+    condition: template
+    value_template: "{{ trigger.event.data.output | default('speaker') == 'speaker' }}"
   - alias: Known satellite, sent by its own device
     condition: template
     value_template: "{{ speaker != '' and trigger.event.data.device_id | default('') == room.device_id }}"

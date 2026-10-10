@@ -1,0 +1,95 @@
+# Home Assistant automation: switch the room speaker to its analog input when
+# an AIVI satellite plays through its jack (issue #17). It is deployed
+# through the automation config API; keep this copy and Home Assistant in
+# sync.
+#
+# The satellite's jack is cabled to the room speaker's analog input. The
+# speaker switches when
+# - a wake word comes from a satellite whose "Audioausgabe" is "Klinke", so
+#   music on the speaker stops before the command and the switch is done
+#   before the answer,
+# - someone sets "Audioausgabe" to "Klinke",
+# - the satellite's media player starts to play,
+# - the satellite's self test starts.
+# On switching, the speaker gets the room's fixed volume. It stays there: the
+# echo canceller needs a constant echo path, so loudness is set on the
+# satellite's media player. The previous source does not come back.
+#
+# Fail closed, like the TTS router: only listed rooms, events only from the
+# satellite's own device, and nothing while the speaker is grouped with other
+# rooms.
+id: aivi_jack_output
+alias: AIVI Klinkenausgang
+description: Schaltet den Raumlautsprecher auf den Analogeingang, wenn ein AIVI-Satellit über die Klinke spielt.
+mode: queued
+max: 10
+triggers:
+  - trigger: event
+    event_type: esphome.aivi_wake_word
+    id: wake_word
+  - trigger: event
+    event_type: esphome.aivi_self_test
+    event_data:
+      phase: start
+    id: self_test
+  # Entity ids of every listed room's satellite.
+  - trigger: state
+    entity_id:
+      - select.wohnung_wohnzimmer_aivi_satellit_audioausgabe
+    to: Klinke
+    id: output_select
+  - trigger: state
+    entity_id:
+      - media_player.wohnung_wohnzimmer_aivi_satellit_audioausgang
+    to: playing
+    id: player
+variables:
+  # satellite_id -> Home Assistant device of the satellite, its output select
+  # and media player, the room speaker, its analog input and the fixed volume
+  rooms:
+    living_room:
+      device_id: 9d60b29d2391e4609bfceb502da83836
+      output_select: select.wohnung_wohnzimmer_aivi_satellit_audioausgabe
+      player: media_player.wohnung_wohnzimmer_aivi_satellit_audioausgang
+      speaker: media_player.pulse_flex_living_room_1
+      source: Analog Input
+      volume: 0.3
+  room_id: >-
+    {%- set ns = namespace(id='') -%}
+    {%- for key, room in rooms.items() -%}
+      {%- if trigger.platform == 'event' -%}
+        {%- if key == trigger.event.data.satellite_id | default('') -%}{%- set ns.id = key -%}{%- endif -%}
+      {%- elif trigger.entity_id in [room.output_select, room.player] -%}
+        {%- set ns.id = key -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ ns.id }}
+  room: "{{ rooms.get(room_id, {}) }}"
+  speaker: "{{ room.speaker | default('') }}"
+conditions:
+  - alias: Known room
+    condition: template
+    value_template: "{{ speaker != '' }}"
+  - alias: Events from the satellite's own device, wake words only in jack mode
+    condition: template
+    value_template: >-
+      {{ trigger.platform != 'event'
+         or (trigger.event.data.device_id | default('') == room.device_id
+             and (trigger.id != 'wake_word' or trigger.event.data.output | default('') == 'jack')) }}
+  - alias: Speaker not grouped with other rooms
+    condition: template
+    value_template: "{{ (state_attr(speaker, 'group_members') or []) | reject('eq', speaker) | list | length == 0 }}"
+  - alias: Speaker not on the analog input yet
+    condition: template
+    value_template: "{{ state_attr(speaker, 'source') != room.source }}"
+actions:
+  - action: media_player.select_source
+    target:
+      entity_id: "{{ speaker }}"
+    data:
+      source: "{{ room.source }}"
+  - action: media_player.volume_set
+    target:
+      entity_id: "{{ speaker }}"
+    data:
+      volume_level: "{{ room.volume }}"
