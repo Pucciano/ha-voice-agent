@@ -28,11 +28,10 @@ esp32:
   framework:
     type: esp-idf
     sdkconfig_options:
-      # One pool for every socket. ESPHome counts the API, OTA and the take
-      # streamer, but not the two audio_http media sources
-      # (aivi-audio-output.yaml); keep room for an extra API client such as
-      # the ESPHome log viewer.
-      CONFIG_LWIP_MAX_SOCKETS: "16"
+      # One pool for every socket. ESPHome counts 16 (API 4, OTA 1, mDNS 2,
+      # Wi-Fi 2, take streamer 1, Sendspin 6), but not the two audio_http
+      # media sources (aivi-audio-output.yaml); 20 leaves two spare.
+      CONFIG_LWIP_MAX_SOCKETS: "20"
 
 psram:
   mode: octal

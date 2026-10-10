@@ -14,6 +14,13 @@
 #                  the jack; the automation "AIVI Klinkenausgang" switches
 #                  the room speaker to its analog input when it starts.
 #
+# Music Assistant streams to the satellite with its Sendspin protocol: it
+# finds the satellite by mDNS and connects to TCP port 8928. The satellite
+# is then a player of its own in Music Assistant, and with Music
+# Assistant's Spotify Connect plugin also a device in the Spotify app.
+# Sendspin plays through the media pipeline of Audioausgang, so it ducks and
+# switches the room speaker like any other media.
+#
 # The voice assistant stays without a media player, so Home Assistant runs
 # the pipeline as before and the answer arrives as a URL in on_tts_end. Its
 # volume is the media player's volume, set in the codec.
@@ -67,6 +74,13 @@ media_source:
   - platform: audio_http
     id: media_http_source
     buffer_size: 500000
+  # No delay settings: they only align the satellite with other Sendspin
+  # players, and none plays in the same room.
+  - platform: sendspin
+    id: sendspin_media_source
+
+sendspin:
+  id: sendspin_hub
 
 media_player:
   - platform: speaker_source
@@ -86,6 +100,7 @@ media_player:
       speaker: media_resampling_speaker
       sources:
         - media_http_source
+        - sendspin_media_source
     # The codec attenuates 0.5 dB per step over 64 dB. 100 % is 0 dB, the
     # line level the room speaker's analog input expects; 1 % is -32 dB.
     volume_min: 0.5
