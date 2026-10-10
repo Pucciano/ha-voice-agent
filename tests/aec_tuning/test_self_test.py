@@ -158,11 +158,13 @@ def test_echo_attenuation(simulator) -> None:
     assert weak["warnings"] & LOW_ERLE
 
 
-def test_speaker_switch_time(simulator) -> None:
-    # The room speaker plays the jack only 2.5 s after the first reference.
-    r = run(simulator, "--switch-ms", 2500)
+@pytest.mark.parametrize("switch_ms", [2500, 15000])
+def test_speaker_switch_time(simulator, switch_ms) -> None:
+    # The room speaker plays the jack only later, e.g. while its amplifier
+    # wakes from standby (5-15 s on a Pulse Flex).
+    r = run(simulator, "--switch-ms", switch_ms)
     assert r["step"] == "done"
-    assert r["switch_ms"] == pytest.approx(2500, abs=30)
+    assert r["switch_ms"] == pytest.approx(switch_ms, abs=30)
 
 
 def test_unstable_delay_keeps_sys_delay(simulator) -> None:

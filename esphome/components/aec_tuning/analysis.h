@@ -10,8 +10,9 @@
 //            AUDIO_MGR_SYS_DELAY at 0 and AUDIO_MGR_REF_GAIN at 1 (formatBCE's
 //            firmware ships 8, which would clip the test signal)
 //     floor    1 s silence: noise floor per band
-//     pilot    1 kHz until the microphone hears it (the room speaker may
-//              still be switching to its analog input)
+//     pilot    1 kHz until the microphone hears it, up to 20 s (the room
+//              speaker may still be switching to its analog input, or waking
+//              its amplifier from standby)
 //     bursts   3 x 0.5 s noise: echo delay by cross-correlation, reference
 //              and echo levels
 //     tones    125 Hz to 4 kHz, 1.2 s each, then 1.0 s silence: echo path
@@ -104,7 +105,9 @@ constexpr float kOnsetBDb = 10.0f;        // phase B microphone over the floor, 
 constexpr uint32_t kSettleMs = 300;
 constexpr uint32_t kFloorMs = 1000;
 constexpr uint32_t kNoReferenceMs = 3000;
-constexpr uint32_t kNoEchoMs = 8000;
+// The Pulse Flex's amplifier needs 5-15 s to wake from standby (Bluesound
+// support); the pilot waits for it, and switch_ms reports the time.
+constexpr uint32_t kNoEchoMs = 20000;
 constexpr uint32_t kSegmentTimeoutMs = 4000;
 constexpr uint32_t kOnsetBTimeoutMs = 3000;
 
