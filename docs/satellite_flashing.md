@@ -238,6 +238,15 @@ a constant echo path; set the loudness on `Audioausgang` instead (100 % is
 0 dB, the line level of the analog input; 1 % is -32 dB). Home Assistant can
 play anything on `Audioausgang`, for example with `tts.speak` or
 `media_player.play_media`; the speaker switches when it starts.
+Music Assistant streams to the satellite with its Sendspin protocol. It
+finds the satellite by mDNS (Music Assistant and the satellite must share a
+network) and connects to TCP port 8928; the satellite then appears as a
+player of its own, named after the device. To play Spotify on it, enable
+Music Assistant's `Spotify Connect` plugin and select the satellite under
+`Connected players`: the Spotify app then lists it as a device. Pick the
+satellite, not the speaker: what the speaker plays through its own Spotify
+Connect bypasses the satellite and stays outside the echo reference.
+
 `AIVI Klinkenausgang` acts only for listed rooms and only on events from the
 satellite's own device. The jack has priority over a group: a speaker that
 follows another room leaves the group, and a speaker that leads one releases

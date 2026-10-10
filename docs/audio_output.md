@@ -63,7 +63,9 @@ stopped or paused before the wake word can swallow the start of an answer.
 While the jack route is active, the speaker keeps a fixed volume, because the
 echo canceller needs a constant echo path; the loudness is set on the
 satellite's media player `Audioausgang`. Home Assistant can play any media on
-that player, and the speaker switches to its analog input when it starts.
+that player, Music Assistant reaches it through Sendspin (and the Spotify app
+through Music Assistant's Spotify Connect plugin), and the speaker switches
+to its analog input when it starts.
 Music that the speaker plays on its own (Spotify Connect, BluOS presets)
 bypasses the satellite and stays outside the echo reference.
 
