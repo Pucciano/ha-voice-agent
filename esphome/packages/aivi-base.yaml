@@ -6,8 +6,9 @@
 
 substitutions:
   log_level: DEBUG
-  # formatBCE/Respeaker-XVF3800-ESPHome-integration: respeaker_xvf3800 C++
-  # component and the XMOS firmware image. Pinned to the reviewed commit.
+  # formatBCE/Respeaker-XVF3800-ESPHome-integration: respeaker_xvf3800 and
+  # aic3104 C++ components and the XMOS firmware image. Pinned to the
+  # reviewed commit.
   xvf3800_ref: 7b96e8b00a60174441d09c5c0b26378cccd0b1f2
   # formatBCE/esphome, branch respeaker_microphone: i2s_audio patched on top
   # of ESPHome 2026.9.0. The stock microphone does not work with the XVF3800.
@@ -26,6 +27,12 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
+    sdkconfig_options:
+      # One pool for every socket. ESPHome counts the API, OTA and the take
+      # streamer, but not the two audio_http media sources
+      # (aivi-audio-output.yaml); keep room for an extra API client such as
+      # the ESPHome log viewer.
+      CONFIG_LWIP_MAX_SOCKETS: "16"
 
 psram:
   mode: octal
@@ -59,5 +66,5 @@ external_components:
       type: git
       url: https://github.com/formatBCE/Respeaker-XVF3800-ESPHome-integration
       ref: ${xvf3800_ref}
-    components: [respeaker_xvf3800]
+    components: [respeaker_xvf3800, aic3104]
     refresh: never

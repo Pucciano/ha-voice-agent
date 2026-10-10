@@ -1,9 +1,13 @@
 # AIVI satellite: reSpeaker XVF3800 hardware package
 #
 # The pins are fixed by the board (XIAO pads D4 to D9). The XVF3800 is the I2S
-# master and drives BCLK and LRCLK. ESPHome cannot generate the 12.288 MHz
-# MCLK, so GPIO9 (D10) stays unconfigured. GPIO44 (D7, ESP32 to XVF3800) is
-# unused because the satellite has no local audio output.
+# master and drives BCLK and LRCLK for both directions. ESPHome cannot
+# generate the 12.288 MHz MCLK, so GPIO9 (D10) stays unconfigured.
+#
+# GPIO44 (D7) carries audio from the ESP32 to the XVF3800. The XVF3800 takes
+# it as the echo canceller's reference and passes it on to the TLV320AIC3104
+# codec, which drives the 3.5 mm jack. The media player and the mixer that
+# feed this speaker live in aivi-audio-output.yaml.
 
 logger:
   logs:
@@ -17,10 +21,22 @@ i2c:
     frequency: 400kHz
     scan: true
 
+# Two ESP32 I2S peripherals, one per direction, on the same clock lines.
 i2s_audio:
   - id: i2s_input
-    i2s_lrclk_pin: GPIO7  # D8
-    i2s_bclk_pin: GPIO8  # D9
+    i2s_lrclk_pin:
+      number: GPIO7  # D8
+      allow_other_uses: true
+    i2s_bclk_pin:
+      number: GPIO8  # D9
+      allow_other_uses: true
+  - id: i2s_output
+    i2s_lrclk_pin:
+      number: GPIO7
+      allow_other_uses: true
+    i2s_bclk_pin:
+      number: GPIO8
+      allow_other_uses: true
 
 microphone:
   - platform: i2s_audio
@@ -34,6 +50,29 @@ microphone:
     sample_rate: 48000
     bits_per_sample: 32bit
     channel: stereo
+
+speaker:
+  - platform: i2s_audio
+    id: i2s_speaker
+    i2s_audio_id: i2s_output
+    i2s_dout_pin: GPIO44  # D7, XVF3800 X1D22
+    i2s_mode: secondary
+    dac_type: external
+    sample_rate: 48000
+    bits_per_sample: 32bit
+    channel: stereo
+    # The speaker keeps running and sends silence between sounds, so the
+    # delay from the reference to the echo never changes.
+    timeout: never
+    buffer_duration: 100ms
+    # The volume is set in the codec, after the XVF3800 has taken the
+    # reference: the reference level does not follow the volume.
+    audio_dac: aic3104_dac
+
+audio_dac:
+  - platform: aic3104
+    id: aic3104_dac
+    i2c_id: internal_i2c
 
 respeaker_xvf3800:
   id: respeaker

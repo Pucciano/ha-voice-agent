@@ -2,17 +2,22 @@
 #
 # microWakeWord detects the wake word on the device and starts the Home
 # Assistant voice pipeline; the audio goes to Home Assistant over the native
-# API. The satellite has no speaker: Home Assistant plays the answer on the
-# room's Bluesound, using the event esphome.aivi_tts_uri.
+# API. The answer plays either on the room speaker over the network, played
+# by Home Assistant's TTS router from the event esphome.aivi_tts_uri, or on
+# the satellite itself through the jack (aivi-audio-output.yaml sets
+# audio_on_jack and plays it).
 #
-# One command per wake word. A follow-up (continue_conversation) is refused,
-# because without an echo reference the satellite would hear its own answer.
+# One command per wake word. A follow-up (continue_conversation) is refused:
+# over the network the satellite has no echo reference and would hear its
+# own answer, and through the jack the echo canceller is not verified yet.
 #
 # Another package can pause the assistant with the global assistant_paused:
 # detections are then ignored here, without feedback, counter or event
-# (used by aivi-wake-word-recording.yaml during "Hey AIVI" takes).
+# (used by aivi-wake-word-recording.yaml during "Hey AIVI" takes and by the
+# self test in aivi-aec.yaml).
 #
-# Events to Home Assistant, each with the satellite_id:
+# Events to Home Assistant, each with the satellite_id; the wake word and
+# answer events also carry output, "jack" or "speaker":
 #   esphome.aivi_wake_word   wake word detected
 #   esphome.aivi_stt_text    recognised text
 #   esphome.aivi_tts_uri     URL of the spoken answer
@@ -65,6 +70,10 @@ globals:
   - id: assistant_paused
     type: bool
     initial_value: "false"
+  # Set by aivi-audio-output.yaml: answers play through the jack.
+  - id: audio_on_jack
+    type: bool
+    initial_value: "false"
 
 esphome:
   on_boot:
@@ -115,6 +124,7 @@ micro_wake_word:
               data:
                 satellite_id: ${satellite_id}
                 wake_word: !lambda return wake_word;
+                output: !lambda 'return id(audio_on_jack) ? "jack" : "speaker";'
           - if:
               condition:
                 api.connected:
@@ -162,6 +172,7 @@ voice_assistant:
         data:
           satellite_id: ${satellite_id}
           uri: !lambda return x;
+          output: !lambda 'return id(audio_on_jack) ? "jack" : "speaker";'
   on_error:
     # duplicate_wake_up_detected: another satellite already took the command.
     - if:

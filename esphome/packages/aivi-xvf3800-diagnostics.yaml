@@ -27,8 +27,9 @@
 #   Diagnose XVF3800 Firmware flashen    rewrites the DFU upgrade slot with
 #                                        the embedded image over I2C (about
 #                                        4.5 minutes, keep the power on).
-#   Diagnose GPIO9 und GPIO44 hochohmig  stops the ESP32 from loading either
-#                                        line.
+#   Diagnose GPIO9 hochohmig             stops the ESP32 from loading the
+#                                        MCLK line. GPIO44 is the audio
+#                                        output now, driven by I2S.
 #
 # The firmware block embeds the pinned XVF3800 image. The component flashes it
 # at boot only when the board reports a different version.
@@ -220,26 +221,22 @@ button:
       - respeaker_xvf3800.flash:
 
 switch:
-  # Off restores the boot state: GPIO9 floating, GPIO44 with the pull-up of
-  # the UART0 RX pad.
+  # Off restores the boot state: GPIO9 floating.
   - platform: template
     id: diag_float_pins
-    name: Diagnose GPIO9 und GPIO44 hochohmig
+    name: Diagnose GPIO9 hochohmig
     entity_category: diagnostic
     optimistic: true
     restore_mode: DISABLED
     turn_on_action:
       - lambda: |-
-          for (gpio_num_t pin : {GPIO_NUM_9, GPIO_NUM_44}) {
-            gpio_set_direction(pin, GPIO_MODE_INPUT);
-            gpio_set_pull_mode(pin, GPIO_FLOATING);
-          }
-          ESP_LOGI("diag", "GPIO9 and GPIO44 floating");
+          gpio_set_direction(GPIO_NUM_9, GPIO_MODE_INPUT);
+          gpio_set_pull_mode(GPIO_NUM_9, GPIO_FLOATING);
+          ESP_LOGI("diag", "GPIO9 floating");
     turn_off_action:
       - lambda: |-
           gpio_set_pull_mode(GPIO_NUM_9, GPIO_FLOATING);
-          gpio_set_pull_mode(GPIO_NUM_44, GPIO_PULLUP_ONLY);
-          ESP_LOGI("diag", "GPIO9 floating, GPIO44 pull-up");
+          ESP_LOGI("diag", "GPIO9 floating");
 
 select:
   # The wake word and the pipeline use channel 1 and are not affected.

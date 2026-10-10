@@ -29,13 +29,6 @@ external_components:
       path: components
     components: [take_streamer]
 
-esp32:
-  framework:
-    sdkconfig_options:
-      # The recorder connection takes the last of the ten default sockets;
-      # keep room for an extra API client such as the ESPHome log viewer.
-      CONFIG_LWIP_MAX_SOCKETS: "12"
-
 take_streamer:
   id: wake_word_take
   microphone:

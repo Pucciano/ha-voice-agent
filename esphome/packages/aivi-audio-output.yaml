@@ -1,0 +1,196 @@
+# AIVI satellite: audio output package (issue #17)
+#
+# The satellite plays audio itself: ESP32 -> XVF3800 -> codec -> 3.5 mm jack,
+# cabled to the analog input of the room speaker. Everything that plays here
+# is the XVF3800's echo reference, so the echo canceller can remove it from
+# the microphones. Audio the room speaker plays on its own (network
+# streams) is not in the reference.
+#
+#   Audioausgabe   where answers go: "Klinke" plays them here, through the
+#                  jack; the room speaker option leaves them to Home
+#                  Assistant's TTS router, which plays them on the speaker
+#                  over the network (the default)
+#   Audioausgang   media player for Home Assistant. It always plays through
+#                  the jack; the automation "AIVI Klinkenausgang" switches
+#                  the room speaker to its analog input when it starts.
+#
+# The voice assistant stays without a media player, so Home Assistant runs
+# the pipeline as before and the answer arrives as a URL in on_tts_end. Its
+# volume is the media player's volume, set in the codec.
+#
+# Media ducks by 20 dB during announcements and while the assistant runs. A
+# new wake word stops an answer that still plays.
+#
+# Requires aivi-voice-input.yaml (audio_on_jack, voice assistant) and
+# aivi-xvf3800.yaml (i2s_speaker), and the substitution room_speaker: the
+# Home Assistant name of the room speaker, e.g. Wohnzimmerlautsprecher.
+
+substitutions:
+  jack_option: Klinke
+
+audio:
+  codecs:
+    # Home Assistant's TTS answers for this satellite are MP3; the media
+    # player's own pipelines get FLAC from Home Assistant.
+    mp3:
+
+speaker:
+  # Announcements, media and the self test (aivi-aec.yaml) share the output.
+  - platform: mixer
+    id: mixing_speaker
+    output_speaker: i2s_speaker
+    num_channels: 2
+    task_stack_in_psram: true
+    source_speakers:
+      - id: announcement_mixing_input
+        timeout: never
+      - id: media_mixing_input
+        timeout: never
+      - id: self_test_mixing_input
+
+  # The mixer needs one sample rate, so every pipeline is resampled first.
+  - platform: resampler
+    id: announcement_resampling_speaker
+    output_speaker: announcement_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+  - platform: resampler
+    id: media_resampling_speaker
+    output_speaker: media_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+
+media_source:
+  - platform: audio_http
+    id: announcement_http_source
+    buffer_size: 250000
+  - platform: audio_http
+    id: media_http_source
+    buffer_size: 500000
+
+media_player:
+  - platform: speaker_source
+    id: aivi_player
+    name: Audioausgang
+    announcement_pipeline:
+      format: FLAC
+      num_channels: 1
+      sample_rate: 48000
+      speaker: announcement_resampling_speaker
+      sources:
+        - announcement_http_source
+    media_pipeline:
+      format: FLAC
+      num_channels: 2
+      sample_rate: 48000
+      speaker: media_resampling_speaker
+      sources:
+        - media_http_source
+    # The codec attenuates 0.5 dB per step over 64 dB. 100 % is 0 dB, the
+    # line level the room speaker's analog input expects; 1 % is -32 dB.
+    volume_min: 0.5
+    volume_max: 1.0
+    volume_initial: 1.0
+    volume_increment: 0.05
+    on_announcement:
+      - script.execute: duck_media
+    on_state:
+      - if:
+          condition:
+            and:
+              - not:
+                  media_player.is_announcing: aivi_player
+              - not:
+                  voice_assistant.is_running:
+          then:
+            - script.execute: unduck_media
+
+select:
+  - platform: template
+    id: audio_output
+    name: Audioausgabe
+    icon: mdi:speaker-wireless
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - ${jack_option}
+      - ${room_speaker}
+    initial_option: ${room_speaker}
+    on_value:
+      - lambda: id(audio_on_jack) = x == "${jack_option}";
+      # An answer that plays through the jack would be silent on the room
+      # speaker once it plays its network source again.
+      - if:
+          condition:
+            lambda: return !id(audio_on_jack);
+          then:
+            - script.execute: stop_local_audio
+
+esphome:
+  on_boot:
+    - priority: -100
+      then:
+        - lambda: id(audio_on_jack) = id(audio_output).current_option() == "${jack_option}";
+
+# Added to the actions of aivi-voice-input.yaml.
+voice_assistant:
+  on_start:
+    # A new command interrupts an answer that still plays.
+    - script.execute: stop_local_audio
+    - script.execute: duck_media
+  on_tts_end:
+    - if:
+        condition:
+          lambda: return id(audio_on_jack);
+        then:
+          - script.execute:
+              id: play_answer_locally
+              url: !lambda return x;
+  on_end:
+    - wait_until:
+        not:
+          voice_assistant.is_running:
+    - if:
+        condition:
+          not:
+            media_player.is_announcing: aivi_player
+        then:
+          - script.execute: unduck_media
+  on_client_disconnected:
+    - script.execute: unduck_media
+
+script:
+  - id: play_answer_locally
+    parameters:
+      url: string
+    then:
+      - media_player.play_media:
+          id: aivi_player
+          media_url: !lambda return url;
+          announcement: true
+
+  # Stops answers and other announcements; media keeps playing.
+  - id: stop_local_audio
+    then:
+      - if:
+          condition:
+            media_player.is_announcing: aivi_player
+          then:
+            - media_player.stop:
+                id: aivi_player
+                announcement: true
+
+  - id: duck_media
+    then:
+      - mixer_speaker.apply_ducking:
+          id: media_mixing_input
+          decibel_reduction: 20
+          duration: 0s
+
+  - id: unduck_media
+    then:
+      - mixer_speaker.apply_ducking:
+          id: media_mixing_input
+          decibel_reduction: 0
+          duration: 1s
