@@ -1,8 +1,7 @@
 // AIVI satellite: XVF3800 diagnostics helpers
 //
-// Used by aivi-xvf3800-diagnostics.yaml. Reads and writes XMOS control
-// servicers over I2C with status handling, and samples the levels of the lines
-// between the ESP32 and the XVF3800.
+// Used by aivi-xvf3800-diagnostics.yaml. Probes XMOS control servicers over
+// I2C and samples the levels of the lines between the ESP32 and the XVF3800.
 #pragma once
 
 #include <cmath>
@@ -12,75 +11,17 @@
 
 #include "driver/gpio.h"
 
-#include "esphome/components/respeaker_xvf3800/respeaker_xvf3800.h"
+#include "esphome/components/aec_tuning/xvf3800_control.h"
 
 namespace aivi_diagnostics {
 
-using Xvf = esphome::respeaker_xvf3800::RespeakerXVF3800;
-
-// Status bytes of the XMOS control transport, plus one of our own for a bus
-// error. The servicers on the audio tile answer "wait" or "retry" until they
-// have processed a command, and "queue full" when commands pile up.
-constexpr uint8_t kStatusDone = 0x00;
-constexpr uint8_t kStatusWait = 0x01;
-constexpr uint8_t kStatusRetry = 0x40;
-constexpr uint8_t kStatusBusError = 0xFE;
-// 30 tries with 3 ms pauses: a running audio pipeline answers within one or
-// two 15 ms frames.
-constexpr uint8_t kMaxTries = 30;
-
-inline bool busy(uint8_t status) { return status == kStatusWait || status == kStatusRetry; }
-
-// Control read: write {resid, cmd | 0x80, len + 1}, then read a status byte and
-// len payload bytes. Repeats the request while the servicer is busy.
-inline uint8_t read(Xvf *xvf, uint8_t resid, uint8_t cmd, uint8_t *out, uint8_t len, uint8_t &tries) {
-  if (len > 32)
-    return kStatusBusError;
-  const uint8_t request[3] = {resid, static_cast<uint8_t>(cmd | 0x80), static_cast<uint8_t>(len + 1)};
-  uint8_t response[33];
-  uint8_t status = kStatusBusError;
-  for (tries = 1;; tries++) {
-    std::memset(response, 0, sizeof(response));
-    if (xvf->write_read(request, sizeof(request), response, len + 1) != esphome::i2c::ERROR_OK)
-      return kStatusBusError;
-    status = response[0];
-    if (!busy(status) || tries >= kMaxTries)
-      break;
-    esphome::delay(3);
-  }
-  std::memcpy(out, response + 1, len);
-  return status;
-}
-
-// Control write: {resid, cmd, len, payload...}, then read the status byte back.
-// Repeats the command while the servicer is busy.
-inline uint8_t write(Xvf *xvf, uint8_t resid, uint8_t cmd, const uint8_t *data, uint8_t len) {
-  if (len > 32)
-    return kStatusBusError;
-  uint8_t request[35] = {resid, cmd, len};
-  std::memcpy(request + 3, data, len);
-  uint8_t status = kStatusBusError;
-  for (uint8_t tries = 1; tries <= kMaxTries; tries++) {
-    if (xvf->write(request, len + 3) != esphome::i2c::ERROR_OK)
-      return kStatusBusError;
-    esphome::delay(5);
-    if (xvf->read(&status, 1) != esphome::i2c::ERROR_OK)
-      return kStatusBusError;
-    if (!busy(status))
-      break;
-    esphome::delay(10);
-  }
-  return status;
-}
-
-// Write without reading a status back, for commands that reset the chip.
-inline bool send(Xvf *xvf, uint8_t resid, uint8_t cmd, const uint8_t *data, uint8_t len) {
-  if (len > 32)
-    return false;
-  uint8_t request[35] = {resid, cmd, len};
-  std::memcpy(request + 3, data, len);
-  return xvf->write(request, len + 3) == esphome::i2c::ERROR_OK;
-}
+// Control reads and writes are shared with the aec_tuning component.
+using aivi_xvf3800::kStatusBusError;
+using aivi_xvf3800::kStatusDone;
+using aivi_xvf3800::read;
+using aivi_xvf3800::send;
+using aivi_xvf3800::write;
+using aivi_xvf3800::Xvf;
 
 // --- Probes: one control read per call, round robin ---
 
