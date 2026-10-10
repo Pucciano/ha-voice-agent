@@ -64,7 +64,10 @@ wake-word detection via microWakeWord and streams audio to Home Assistant over
 the Wyoming protocol after trigger.
 
 **Audio output:** Bluesound Pulse Flex, controlled through the BluOS Custom
-Integration API via Home Assistant's media_player entity.
+Integration API via Home Assistant's media_player entity. Answers stream to
+it over the network, or the satellite plays them through its 3.5 mm jack into
+the speaker's analog input, which gives the XVF3800 an echo reference
+(`docs/audio_output.md`).
 
 ## VRAM budget
 
@@ -241,7 +244,8 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/wake_word_training.md` trains the custom "Hey AIVI" wake word with
   microWakeWord, from synthetic samples and household recordings.
 - `docs/satellite_flashing.md` is the per-room runbook for flashing a
-  satellite board (XVF3800 firmware, ESP32, verification).
+  satellite board (XVF3800 firmware, ESP32, verification), routing its
+  answers, and the echo canceller self test.
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
   (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
   capture of voice requests for STT training, and the wake word recorder.
@@ -257,6 +261,7 @@ make dev-down         # stop development stack
 make prod-up          # start production stack
 make prod-down        # stop production stack
 make test             # run compileall and basic checks
+make aec-tuning-test  # echo canceller self test engine against a simulated room
 make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU
 make sat-chip DEVICE=/dev/cu.usbmodemXXXX           # identify the ESP32
 make sat-flash SAT=living-room DEVICE=<port-or-ip>   # build and flash

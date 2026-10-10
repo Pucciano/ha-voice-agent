@@ -12,9 +12,11 @@ revision 1.0 and again on 1.1.
 
 The board runs the phase 5 firmware from `esphome/`. "Okay Nabu" is detected on
 the device and starts the Home Assistant pipeline `AIVI Lokal Deutsch`. The
-satellite has no speaker: it reports the answer URL to Home Assistant, which
-plays it on the room's speaker. The flashing steps stay the same when later
-phases add packages.
+answer plays on the room's speaker: Home Assistant streams it there over the
+network, or the satellite plays it itself through its 3.5 mm jack into the
+speaker's analog input, which gives the XVF3800 an echo reference
+([step 6](#6-route-answers-to-the-room-speaker)). The flashing steps stay the
+same when later phases add packages.
 
 ## Prerequisites
 
@@ -67,7 +69,10 @@ Room identifiers are English. File and node names use hyphens
 (`living_room_api_key`).
 
 1. Copy `esphome/aivi-sat-living-room.yaml` to `esphome/aivi-sat-<room>.yaml`.
-2. Change `name`, `friendly_name` and the secret name `<room>_api_key`.
+2. Change `name`, `friendly_name`, `satellite_id`, the secret name
+   `<room>_api_key`, and `room_speaker`: the Home Assistant name of the
+   speaker the jack is cabled to. It becomes the network option of
+   `Audioausgabe`.
 3. Add the key to `esphome/secrets.yaml`. Generate it with
    `openssl rand -base64 32`. Never reuse a key from another satellite.
 4. Copy `esphome/aivi-sat-living-room-diagnostics.yaml` to
@@ -124,6 +129,10 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   `Wake-Word-Aufnahme Dauer` to 0.5 and switch `Wake-Word-Aufnahme` on) shows
   a circling light and ends with `Gespeichert: …`, if the satellite is listed
   on the Jetson ([wake word training, section 4](wake_word_training.md#4-record-the-household)).
+- `Audioausgabe` reads the room speaker's name (answers over the network), and
+  Home Assistant lists the media player `Audioausgang`. `AEC-Verzögerung` and
+  `AEC-Referenzverstärkung` show the XVF3800's own values until the self test
+  or someone sets them; `Selbsttest Status` reads `Bereit`.
 
 Each detection logs `Detected 'Okay Nabu' with sliding average probability is
 … and max probability is …`. The average is taken at the moment it crosses the
@@ -147,11 +156,14 @@ appear in the default log. Read them in Home Assistant or with any API client.
 | Circling white-blue comet | Home Assistant is working on the command |
 | Circling green light | Wake word take running: "Hey AIVI" again and again |
 | Circling red light | Wake word take running: everyday sound |
+| Circling white light | Echo canceller self test running |
 | Off | Ready, listening for the wake word |
 
 The satellite refuses follow-up questions (`continue_conversation`): every
-command needs the wake word. Without an echo reference it would otherwise hear
-its own answer from the room speaker.
+command needs the wake word. Over the network it has no echo reference and
+would hear its own answer from the room speaker; through the jack the echo
+canceller has to prove itself first
+([step 7](#7-tune-the-echo-canceller)).
 
 ### 6. Route answers to the room speaker
 
@@ -182,9 +194,104 @@ Test it:
 - "Okay Nabu", then "Wie spät ist es?": the answer comes from the room speaker.
 - Negative test: in Home Assistant, fire the event `esphome.aivi_tts_uri` with
   `satellite_id: unknown` from the developer tools. Nothing plays, and the
-  automation trace ends at the first condition.
+  automation trace ends at the condition `Known satellite, sent by its own
+  device`.
 
-### 7. Later updates
+#### Through the jack
+
+The satellite can play the answer itself: ESP32 → XVF3800 → codec → 3.5 mm
+jack, cabled to the speaker's analog input. The XVF3800 takes everything the
+satellite plays as the echo canceller's reference, so it can remove the
+answer, and music played through the satellite, from what the microphones
+hear. Music the speaker plays on its own (Spotify, BluOS) is not in the
+reference.
+
+1. Cable the satellite's jack to the speaker's analog input. In the BluOS app,
+   for that input: A/V mode on (50 ms delay, the shortest BluOS offers), and
+   `Hide source` off. Home Assistant reads the speaker's inputs every
+   15 minutes, so it can take that long until `Analog Input` appears in the
+   speaker's source list.
+2. Add the room to `config/homeassistant/aivi_jack_output.yaml`
+   (`AIVI Klinkenausgang`): an entry under `rooms` with the satellite's device
+   id, its `Audioausgabe` select and `Audioausgang` media player, the speaker,
+   its analog input and a fixed volume; also list the select and the media
+   player in the two state triggers. Update the automation in Home Assistant
+   with the file content.
+3. Set `Audioausgabe` to `Klinke`. The speaker switches to `Analog Input` and
+   gets the fixed volume.
+
+From then on, the wake word switches the speaker to its analog input if it
+plays something else (music stops before the command, as with network
+answers), and the satellite plays the answer through the jack. The event
+`esphome.aivi_tts_uri` carries `output: jack`, so the TTS router plays
+nothing. The speaker keeps its fixed volume, because the echo canceller needs
+a constant echo path; set the loudness on `Audioausgang` instead (100 % is
+0 dB, the line level of the analog input; 1 % is -32 dB). Home Assistant can
+play anything on `Audioausgang`, for example with `tts.speak` or
+`media_player.play_media`; the speaker switches when it starts.
+`AIVI Klinkenausgang` fails closed like the router: only listed rooms, events
+only from the satellite's own device, nothing while the speaker is grouped.
+
+Test it:
+
+- With `Audioausgabe` on `Klinke`: "Okay Nabu", then "Wie spät ist es?". The
+  answer comes from the speaker's analog input; the router's trace ends at
+  `Answer goes to the room speaker`.
+- Start music on the speaker from the BluOS app, then say "Okay Nabu": the
+  music stops and the speaker switches to `Analog Input`.
+- Back on the room speaker's name, answers play over the network again.
+
+### 7. Tune the echo canceller
+
+The self test measures the echo path through the jack and sets the echo
+canceller (AEC). It plays about 35 seconds of noise bursts and tones from
+125 Hz to 4 kHz through the jack, and the XVF3800 records them: its output
+mux sends the microphone and the reference, later the AEC residual, to the
+ESP32 instead of the processed signal. Keep the room quiet and do not speak
+while it runs; the wake word is paused, and the ring shows a circling white
+light.
+
+Run it after cabling, after moving the satellite or the speaker, and after a
+change of the speaker's volume:
+
+1. `Audioausgabe` on `Klinke`, the speaker not grouped with other rooms.
+2. Press `Selbsttest starten`. `Selbsttest Status` follows the steps:
+   waiting for the echo of a 1 kHz pilot tone (the speaker may still be
+   switching to its analog input), delay, tones and reverberation, echo
+   attenuation. `Selbsttest abbrechen` stops it and restores the settings.
+3. When it reads `Fertig`, read the results:
+
+| Entity | Meaning |
+|---|---|
+| `Echo-Verzögerung` | Time from the reference to the echo at the microphone. Behind a Bluesound analog input a little more than its 50 ms; it should not change between runs. |
+| `AEC-Verzögerung` | Set to the delay minus 24 samples, at most 256 (16 ms). The rest stays inside the 192 ms echo filter. |
+| `AEC-Referenzverstärkung` | Set so a full-scale signal reaches -2 dBFS in the XVF3800 (XMOS: as high as possible, 1-2 dB headroom). |
+| `Echo-Abstand zur Referenz` | Echo peak at the microphone relative to the reference peak. XMOS wants at least 6 dB below; above that, lower `Audioausgang`. |
+| `Nachhallzeit` | RT60, median of the 500 Hz to 2 kHz bands. |
+| `Echodämpfung` | Echo attenuation (ERLE) after 4 s of adaptation, broadband. |
+| `Selbsttest Ergebnis` | Delay, the old and new AEC values, the rest of the delay, echo to reference, RT60, how much of the decay the filter covers, attenuation, convergence. |
+| `Selbsttest Frequenzbänder` | Per band: echo path gain, RT60 and attenuation. |
+| `Selbsttest Hinweise` | What to change, or `Keine`. |
+
+The test changes only the two AEC values; it stores them on the satellite,
+which writes them at every boot. Level advice stays advice, because the
+volume and the microphone gain also change what the wake word and speech
+recognition hear. Home Assistant gets the event `esphome.aivi_self_test` with
+`phase: start`, then `done` with every value, or `error` with a code:
+
+| Status | Cause |
+|---|---|
+| `Die Wiedergabe erreicht den XVF3800 nicht` | The reference stays silent: the ESP32's audio does not reach the XVF3800 (GPIO44, I2S output). |
+| `Kein Echo …` | The microphones do not hear the pilot: speaker not on its analog input, cable, or volume too low. |
+| `Echo zu schwach für die Verzögerung` | No clear correlation peak in at least two of the three bursts. |
+| `Messkanäle unplausibel` | The residual is louder than the microphone; the XVF3800 firmware routes its outputs differently. |
+
+The echo canceller works with what is left of its filter: behind the
+Bluesound's 50 ms, about 40 ms of the 192 ms filter carry no echo, so it
+covers only about 150 ms of the room's decay. `Selbsttest Ergebnis` says how
+many dB of the decay that is.
+
+### 8. Later updates
 
 Updates go over the network with encrypted OTA:
 
@@ -192,7 +299,7 @@ Updates go over the network with encrypted OTA:
 make sat-flash SAT=<room> DEVICE=<ip-address>
 ```
 
-### 8. Replace a board
+### 9. Replace a board
 
 A replacement board for a room keeps the room's device file and API key, so
 Home Assistant keeps the device, its entities and the router entry:
@@ -256,9 +363,9 @@ Repairs, in this order:
    The log shows the progress and ends with `Update complete`. If it breaks
    off, the XVF3800 starts the factory USB firmware at the next power-up;
    repeat step 2 of the per-board steps to get it back.
-4. `Diagnose GPIO9 und GPIO44 hochohmig`, then a reboot of the XVF3800, rules
-   out the ESP32. GPIO9 is the MCLK line and GPIO44 carries data to the
-   XVF3800.
+4. `Diagnose GPIO9 hochohmig`, then a reboot of the XVF3800, rules out the
+   ESP32 loading the MCLK line. GPIO44 carries the audio output to the
+   XVF3800 and stays with I2S.
 
 If the audio servicers still do not answer after these steps, suspect a
 hardware defect of the XVF3800 board.

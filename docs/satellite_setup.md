@@ -64,11 +64,11 @@ ESPHome device. Assign the satellite to the voice pipeline that uses the local
 STT (Wyoming Faster-Whisper on port 10300), the LLM endpoint, and the local
 TTS (Wyoming Piper on port 10200).
 
-The audio output for TTS responses is routed through the Bluesound Pulse Flex
-media_player entity rather than through the satellite hardware itself. This
-separation allows high-quality audio playback on a dedicated speaker while
-keeping the satellite focused on input capture. See `docs/audio_output.md` for
-the Bluesound configuration.
+TTS responses play on the room's Bluesound Pulse Flex, either streamed over
+the network by Home Assistant or played by the satellite through its 3.5 mm
+jack into the speaker's analog input; the satellite's select `Audioausgabe`
+chooses. Only the jack route gives the XVF3800 an echo reference. See
+`docs/audio_output.md` for both routes.
 
 ## Troubleshooting
 

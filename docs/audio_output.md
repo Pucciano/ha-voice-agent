@@ -19,17 +19,44 @@ TTS audio, adjust volume, and manage playback state.
 
 ## TTS routing
 
-When the voice pipeline produces a spoken response, the audio flows through
-several stages. Piper generates the speech audio and makes it available through
-the Wyoming TTS protocol on port 10200. Home Assistant receives the audio from
-the Wyoming integration and routes it to the configured media_player entity
-for the relevant zone. The Bluesound Pulse Flex then streams and plays the
-audio over its built-in speaker.
+Piper generates the spoken answer, and Home Assistant serves it from its TTS
+proxy. The AIVI satellite reports the answer's URL in the event
+`esphome.aivi_tts_uri`; the satellite's select `Audioausgabe` decides where
+it plays:
 
-The routing is configured in the Home Assistant voice pipeline settings. When
-setting up the pipeline, select the Bluesound media_player entity as the audio
-output target. This ensures that TTS responses from the voice assistant are
-played on the Pulse Flex rather than through the satellite hardware.
+- **Over the network** (the room speaker's name, the default): the automation
+  `config/homeassistant/aivi_tts_router.yaml` plays the answer on the room's
+  Pulse Flex. The satellite's XVF3800 does not know what the speaker plays, so
+  it has no echo reference.
+- **Through the jack** (`Klinke`): the satellite plays the answer itself. Its
+  3.5 mm jack is cabled to the Pulse Flex's analog input, and
+  `config/homeassistant/aivi_jack_output.yaml` switches the speaker to that
+  input. The XVF3800 takes everything the satellite plays as the echo
+  canceller's reference.
+
+The steps are in `docs/satellite_flashing.md`, sections 6 and 7.
+
+## Satellite jack route
+
+The signal path is ESP32 (I2S, GPIO44) → XVF3800 → TLV320AIC3104 codec →
+3.5 mm jack → Pulse Flex analog input. The XVF3800 taps the reference before
+the codec, so the satellite's volume, set in the codec, does not change the
+reference level.
+
+The Pulse Flex's analog input delays by at least 50 ms (A/V mode on; BluOS
+offers no shorter setting), and the XVF3800 can delay its reference by at most
+16 ms (`AUDIO_MGR_SYS_DELAY`, 256 samples). About 40 ms of the echo
+canceller's 192 ms filter therefore carry no echo, and roughly 150 ms remain
+for the room's reverberation. The satellite's self test measures the delay,
+the reverberation time and the echo attenuation and sets the delay and the
+reference gain.
+
+While the jack route is active, the speaker keeps a fixed volume, because the
+echo canceller needs a constant echo path; the loudness is set on the
+satellite's media player `Audioausgang`. Home Assistant can play any media on
+that player, and the speaker switches to its analog input when it starts.
+Music that the speaker plays on its own (Spotify Connect, BluOS presets)
+bypasses the satellite and stays outside the echo reference.
 
 ## Volume and zone configuration
 
@@ -56,3 +83,7 @@ If there is noticeable latency between the voice command and the spoken
 response, the bottleneck is most likely the LLM inference step rather than the
 audio routing. Check vLLM latency metrics through the llm_proxy capture data
 or the evaluation scripts before investigating the audio chain.
+
+If answers through the jack stay silent, check that the speaker is not
+grouped with another room (both automations then do nothing) and that
+`Analog Input` is in its source list (BluOS `Hide source` off).
