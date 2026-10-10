@@ -3,21 +3,28 @@
 # through the automation config API; keep this copy and Home Assistant in
 # sync.
 #
-# The satellite's jack is cabled to the room speaker's analog input. The
-# speaker switches when
+# The satellite's jack is cabled to the room speaker's analog input. BluOS
+# has no Auto Sense for analog inputs (only for digital ones), so the input
+# has to be selected. The speaker switches when
 # - a wake word comes from a satellite whose "Audioausgabe" is "Klinke", so
 #   music on the speaker stops before the command and the switch is done
 #   before the answer,
 # - someone sets "Audioausgabe" to "Klinke",
 # - the satellite's media player starts to play,
 # - the satellite's self test starts.
+#
+# The jack has priority over a group: a speaker that follows another room
+# leaves the group, and a speaker that leads one releases its followers, so
+# no other room plays the satellite's audio. Selecting the input starts a
+# continuous stream of the input at once (BluOS state "stream", about 0.5 s
+# after the call). The automation checks that the speaker reports the input,
+# tries once more, and logs a warning otherwise.
+#
 # On switching, the speaker gets the room's fixed volume. It stays there: the
 # echo canceller needs a constant echo path, so loudness is set on the
 # satellite's media player. The previous source does not come back.
 #
-# Fail closed, like the TTS router: only listed rooms, events only from the
-# satellite's own device, and nothing while the speaker is grouped with other
-# rooms.
+# Only listed rooms, and events only from the satellite's own device.
 id: aivi_jack_output
 alias: AIVI Klinkenausgang
 description: Schaltet den Raumlautsprecher auf den Analogeingang, wenn ein AIVI-Satellit über die Klinke spielt.
@@ -76,20 +83,53 @@ conditions:
       {{ trigger.platform != 'event'
          or (trigger.event.data.device_id | default('') == room.device_id
              and (trigger.id != 'wake_word' or trigger.event.data.output | default('') == 'jack')) }}
-  - alias: Speaker not grouped with other rooms
-    condition: template
-    value_template: "{{ (state_attr(speaker, 'group_members') or []) | reject('eq', speaker) | list | length == 0 }}"
-  - alias: Speaker not on the analog input yet
-    condition: template
-    value_template: "{{ state_attr(speaker, 'source') != room.source }}"
 actions:
-  - action: media_player.select_source
-    target:
-      entity_id: "{{ speaker }}"
-    data:
-      source: "{{ room.source }}"
-  - action: media_player.volume_set
-    target:
-      entity_id: "{{ speaker }}"
-    data:
-      volume_level: "{{ room.volume }}"
+  - variables:
+      others: "{{ (state_attr(speaker, 'group_members') or []) | reject('eq', speaker) | list }}"
+  - alias: Leave the group, or release the followers
+    if:
+      - condition: template
+        value_template: "{{ others | length > 0 }}"
+    then:
+      - action: media_player.unjoin
+        target:
+          entity_id: "{{ others if state_attr(speaker, 'master') == true else [speaker] }}"
+      - wait_template: "{{ (state_attr(speaker, 'group_members') or []) | reject('eq', speaker) | list | length == 0 }}"
+        timeout: "00:00:10"
+  - alias: Switch to the analog input
+    if:
+      - condition: template
+        value_template: "{{ state_attr(speaker, 'source') != room.source }}"
+    then:
+      - action: media_player.select_source
+        target:
+          entity_id: "{{ speaker }}"
+        data:
+          source: "{{ room.source }}"
+      - action: media_player.volume_set
+        target:
+          entity_id: "{{ speaker }}"
+        data:
+          volume_level: "{{ room.volume }}"
+      - wait_template: "{{ state_attr(speaker, 'source') == room.source }}"
+        timeout: "00:00:05"
+      - if:
+          - condition: template
+            value_template: "{{ not wait.completed }}"
+        then:
+          - action: media_player.select_source
+            target:
+              entity_id: "{{ speaker }}"
+            data:
+              source: "{{ room.source }}"
+          - wait_template: "{{ state_attr(speaker, 'source') == room.source }}"
+            timeout: "00:00:05"
+          - if:
+              - condition: template
+                value_template: "{{ not wait.completed }}"
+            then:
+              - action: system_log.write
+                data:
+                  level: warning
+                  logger: aivi_jack_output
+                  message: "{{ speaker }} did not switch to {{ room.source }}; answers through the jack of {{ room_id }} stay silent."
