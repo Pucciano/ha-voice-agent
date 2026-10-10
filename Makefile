@@ -1,5 +1,5 @@
 .PHONY: dev-up dev-up-debug dev-down prod-up prod-down lint format test eval \
-	stt-capture-test wake-word-recorder-test \
+	stt-capture-test wake-word-recorder-test aec-tuning-test \
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
 	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-pull \
 	ww-import ww-features ww-train ww-evaluate
@@ -53,6 +53,11 @@ stt-capture-test:
 # own, because both services name their package `app`.
 wake-word-recorder-test:
 	uvx --python 3.12 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/wake_word_recorder
+
+# Echo canceller self test engine (esphome/components/aec_tuning) against a
+# simulated room; needs a host C++ compiler.
+aec-tuning-test:
+	uvx --python 3.12 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/aec_tuning
 
 eval:
 	python training/eval/eval_tool_call_validity.py --dataset dev/datasets/llm
