@@ -1,0 +1,19 @@
+{#- State template of the UI helper "Active media player" (Template → Sensor,
+    sensor.active_media_player, display name "Aktiver Lautsprecher", not
+    exposed to Assist). It names the Bluesound player the wall display's music
+    card controls: a group master first, then a player with a real title that
+    plays, then one that is paused, else the living room. -#}
+{%- set lv = 'media_player.pulse_flex_living_room_1' -%}
+{%- set kv = 'media_player.pulse_flex_kitchen_1' -%}
+{%- set idle = ['', 'Spotify - playing elsewhere'] -%}
+{%- set lr = (state_attr(lv, 'media_title') or '') not in idle -%}
+{%- set kr = (state_attr(kv, 'media_title') or '') not in idle -%}
+{%- if state_attr(kv, 'master') == true -%}{{ kv }}
+{%- elif state_attr(lv, 'master') == true -%}{{ lv }}
+{%- elif is_state(kv, 'playing') and kr -%}{{ kv }}
+{%- elif is_state(lv, 'playing') and lr -%}{{ lv }}
+{%- elif is_state(kv, 'paused') and kr -%}{{ kv }}
+{%- elif is_state(lv, 'paused') and lr -%}{{ lv }}
+{%- elif kr and not lr -%}{{ kv }}
+{%- else -%}{{ lv }}
+{%- endif -%}
