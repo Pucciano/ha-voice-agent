@@ -212,6 +212,10 @@ reference.
    `Hide source` off. Home Assistant reads the speaker's inputs every
    15 minutes, so it can take that long until `Analog Input` appears in the
    speaker's source list.
+   Also in the BluOS app, under Settings > Player: switch `Amplifier Standby`
+   off. With it on, the speaker puts its amplifier to sleep after 15 minutes
+   without playback, and waking it takes 5-15 seconds (Bluesound support),
+   long enough to swallow the start of an answer.
 2. Add the room to `config/homeassistant/aivi_jack_output.yaml`
    (`AIVI Klinkenausgang`): an entry under `rooms` with the satellite's device
    id, its `Audioausgabe` select and `Audioausgang` media player, the speaker,
@@ -230,8 +234,28 @@ a constant echo path; set the loudness on `Audioausgang` instead (100 % is
 0 dB, the line level of the analog input; 1 % is -32 dB). Home Assistant can
 play anything on `Audioausgang`, for example with `tts.speak` or
 `media_player.play_media`; the speaker switches when it starts.
-`AIVI Klinkenausgang` fails closed like the router: only listed rooms, events
-only from the satellite's own device, nothing while the speaker is grouped.
+`AIVI Klinkenausgang` acts only for listed rooms and only on events from the
+satellite's own device. The jack has priority over a group: a speaker that
+follows another room leaves the group, and a speaker that leads one releases
+its followers, so no other room plays the satellite's audio. It then checks
+that the speaker reports `Analog Input`, tries once more, and writes a
+warning to the Home Assistant log (logger `aivi_jack_output`) if it still
+does not.
+
+How the Pulse Flex treats its analog input (BluOS 4.12, read from the
+speaker's settings):
+
+- No Auto Sense: BluOS switches automatically only to digital inputs
+  (optical, coaxial, HDMI) when a signal appears, so the automation selects
+  the analog input.
+- Selecting the input starts a continuous stream of it at once, with or
+  without a signal: about 0.2 s after the call Home Assistant reports
+  `playing` with source `Analog Input`, about 0.5 s after it BluOS reports
+  state `stream` (48 kHz, 24 bit).
+- No level control on the input: no gain, no automatic level, no
+  compressor. Replay gain applies to files only. The tone controls (bass
+  and treble) are a fixed filter; the echo canceller learns them with the
+  room. The volume limits (-63 to -3 dB) cap the speaker's volume.
 
 Test it:
 
@@ -270,7 +294,7 @@ change of the speaker's volume:
 | `Echo-Abstand zur Referenz` | Echo peak at the microphone relative to the reference peak. XMOS wants at least 6 dB below; above that, lower `Audioausgang`. |
 | `Nachhallzeit` | RT60, median of the 500 Hz to 2 kHz bands. |
 | `Echodämpfung` | Echo attenuation (ERLE) after 4 s of adaptation, broadband. |
-| `Selbsttest Ergebnis` | Delay, the old and new AEC values, the rest of the delay, echo to reference, RT60, how much of the decay the filter covers, attenuation, convergence. |
+| `Selbsttest Ergebnis` | Delay, the old and new AEC values, the rest of the delay, echo to reference, RT60, how much of the decay the filter covers, attenuation, convergence. `Lautsprecher spielte erst nach … s` means the speaker started late, for example while its amplifier woke from standby. |
 | `Selbsttest Frequenzbänder` | Per band: echo path gain, RT60 and attenuation. |
 | `Selbsttest Hinweise` | What to change, or `Keine`. |
 
@@ -283,7 +307,7 @@ recognition hear. Home Assistant gets the event `esphome.aivi_self_test` with
 | Status | Cause |
 |---|---|
 | `Die Wiedergabe erreicht den XVF3800 nicht` | The reference stays silent: the ESP32's audio does not reach the XVF3800 (GPIO44, I2S output). |
-| `Kein Echo …` | The microphones do not hear the pilot: speaker not on its analog input, cable, or volume too low. |
+| `Kein Echo …` | The microphones do not hear the pilot within 20 s: speaker not on its analog input, cable, or volume too low. |
 | `Echo zu schwach für die Verzögerung` | No clear correlation peak in at least two of the three bursts. |
 | `Messkanäle unplausibel` | The residual is louder than the microphone; the XVF3800 firmware routes its outputs differently. |
 
