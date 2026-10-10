@@ -269,7 +269,7 @@ Test it:
 ### 7. Tune the echo canceller
 
 The self test measures the echo path through the jack and sets the echo
-canceller (AEC). It plays about 35 seconds of noise bursts and tones from
+canceller (AEC). It plays about 45 seconds of noise bursts and tones from
 125 Hz to 4 kHz through the jack, and the XVF3800 records them: its output
 mux sends the microphone and the reference, later the AEC residual, to the
 ESP32 instead of the processed signal. Keep the room quiet and do not speak
@@ -293,10 +293,16 @@ change of the speaker's volume:
 | `AEC-Referenzverstärkung` | Set so a full-scale signal reaches -2 dBFS in the XVF3800 (XMOS: as high as possible, 1-2 dB headroom), between 0.25 and 8. The test measures at 1.0, because formatBCE's 8.0 would clip its tones. |
 | `Echo-Abstand zur Referenz` | Echo peak at the microphone relative to the reference peak. XMOS wants at least 6 dB below; above that, lower `Audioausgang`. |
 | `Nachhallzeit` | RT60, median of the 500 Hz to 2 kHz bands. |
-| `Echodämpfung` | Echo attenuation (ERLE) after 4 s of adaptation, broadband. |
+| `Echodämpfung` | Echo attenuation (ERLE), broadband, over the last 5 of 20 seconds of noise. The test moved the AEC settings, so the canceller adapts anew; `Selbsttest Ergebnis` shows the value after 5, 10, 15 and 20 s. |
 | `Selbsttest Ergebnis` | Delay, the old and new AEC values, the rest of the delay, echo to reference, RT60, how much of the decay the filter covers, attenuation, convergence. `Lautsprecher spielte erst nach … s` means the speaker started late, for example while its amplifier woke from standby. |
 | `Selbsttest Frequenzbänder` | Per band: echo path gain, RT60 and attenuation. |
 | `Selbsttest Hinweise` | What to change, or `Keine`. |
+
+`Echodämpfung messen` runs only the attenuation part (about 25 seconds) with
+the current settings and changes nothing. Use it to compare settings, for
+example `AEC-Verzögerung` at -30 and at 256, or after the speaker sat silent
+on its analog input for more than 15 minutes: if its amplifier slept, the
+result says `Lautsprecher spielte erst nach … s`.
 
 The test changes only the two AEC values; it stores them on the satellite,
 which writes them at every boot. Level advice stays advice, because the

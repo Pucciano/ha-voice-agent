@@ -11,6 +11,7 @@
 //                  [--noise-dbfs DB] [--ref-gain G] [--sys-delay N] [--ref-path-db DB]
 //                  [--latency-ms MS] [--switch-ms MS] [--unstable]
 //                  [--no-reference] [--no-echo] [--abort-ms MS]
+//                  [--adapt-s S] [--attenuation]
 
 #include "analysis.h"
 
@@ -42,6 +43,8 @@ struct Options {
   bool no_reference = false;  // playback never reaches the XVF3800
   bool no_echo = false;       // the speaker does not play the jack
   float abort_ms = -1.0f;
+  float adapt_s = 0.0f;       // the canceller adapts with this time constant after a change
+  bool attenuation = false;   // the attenuation test instead of the full one
 };
 
 Options parse(int argc, char **argv) {
@@ -60,6 +63,8 @@ Options parse(int argc, char **argv) {
     else if (arg == "--ref-path-db") o.ref_path_db = next();
     else if (arg == "--switch-ms") o.switch_ms = next();
     else if (arg == "--abort-ms") o.abort_ms = next();
+    else if (arg == "--adapt-s") o.adapt_s = next();
+    else if (arg == "--attenuation") o.attenuation = true;
     else if (arg == "--unstable") o.unstable = true;
     else if (arg == "--no-reference") o.no_reference = true;
     else if (arg == "--no-echo") o.no_echo = true;
@@ -164,13 +169,14 @@ int main(int argc, char **argv) {
   std::vector<int16_t> buffer(kBufferSamples);
   Engine engine;
   engine.set_buffer(buffer.data());
-  engine.start();
+  engine.start(o.attenuation ? Engine::Mode::ATTENUATION : Engine::Mode::FULL);
 
   // Simulated XVF3800 state.
   enum class Mux { DEFAULT, PHASE_A, PHASE_B } mux = Mux::DEFAULT;
   int sys_delay = o.sys_delay;
   float ref_gain = o.ref_gain;
   bool ever_restored = false;
+  long adapt_from = 0;  // input index of the last settings change
 
   Decimator decimator;
   Reverb reverb(o.rt60_ms);
@@ -205,6 +211,12 @@ int main(int argc, char **argv) {
       case Action::SETUP_B:
         sys_delay = engine.results().sys_delay_new;
         ref_gain = engine.results().ref_gain_new;
+        mux = Mux::PHASE_B;
+        adapt_from = input_index;
+        engine.action_done(true);
+        break;
+      case Action::SETUP_ATTENUATION:
+        engine.set_current_tuning(sys_delay, ref_gain);
         mux = Mux::PHASE_B;
         engine.action_done(true);
         break;
@@ -265,9 +277,18 @@ int main(int argc, char **argv) {
         case Mux::PHASE_A:
           right = reference * ref_path * ref_gain;
           break;
-        case Mux::PHASE_B:
-          right = room * residual_gain + noise_rms * gauss(rng);
+        case Mux::PHASE_B: {
+          // Right after a change the filter is wrong: the residual starts
+          // 3 dB above the echo and falls to the final attenuation.
+          double gain = residual_gain;
+          if (o.adapt_s > 0.0f) {
+            const double t = static_cast<double>(input_index - adapt_from) / kInRate;
+            const double db = -o.erle_db + (o.erle_db + 3.0) * std::exp(-t / o.adapt_s);
+            gain = std::pow(10.0, db / 20.0);
+          }
+          right = room * gain + noise_rms * gauss(rng);
           break;
+        }
         default:
           right = mic;  // processed output, irrelevant here
           break;
@@ -324,6 +345,9 @@ int main(int argc, char **argv) {
   std::printf("\"rt60_ms\":%s,\"tail_coverage_db\":%s,\"erle_db\":%s,\"erle_band_db\":%s,\"converged\":%s,",
               num(r.rt60_ms).c_str(), num(r.tail_coverage_db).c_str(), num(r.erle_db).c_str(),
               num(r.erle_band_db).c_str(), r.converged ? "true" : "false");
+  std::printf("\"erle_trend\":[%s,%s,%s,%s],\"attenuation_only\":%s,", num(r.erle_trend[0]).c_str(),
+              num(r.erle_trend[1]).c_str(), num(r.erle_trend[2]).c_str(), num(r.erle_trend[3]).c_str(),
+              r.attenuation_only ? "true" : "false");
   std::printf("\"bands\":[");
   for (size_t k = 0; k < kBands; k++) {
     const BandResult &b = r.bands[k];

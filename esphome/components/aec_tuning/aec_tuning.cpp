@@ -163,7 +163,7 @@ void AecTuning::poll_converged_() {
 
 // --- Self test ---
 
-bool AecTuning::start_self_test() {
+bool AecTuning::start_self_test(bool attenuation_only) {
   if (this->testing_) {
     ESP_LOGW(TAG, "A self test is already running");
     return false;
@@ -182,7 +182,7 @@ bool AecTuning::start_self_test() {
   this->ring_buffer_->reset();
 
   this->engine_.set_buffer(this->engine_buffer_);
-  this->engine_.start();
+  this->engine_.start(attenuation_only ? Engine::Mode::ATTENUATION : Engine::Mode::FULL);
   this->before_valid_ = false;
   this->out_bytes_ = this->out_offset_ = 0;
   this->dropped_bytes_.store(0, std::memory_order_relaxed);
@@ -194,7 +194,7 @@ bool AecTuning::start_self_test() {
   this->speaker_->start();
   this->capturing_.store(true, std::memory_order_release);
   this->microphone_source_->start();
-  ESP_LOGI(TAG, "Self test started");
+  ESP_LOGI(TAG, attenuation_only ? "Attenuation test started" : "Self test started");
   return true;
 }
 
@@ -264,6 +264,24 @@ void AecTuning::run_action_() {
       ESP_LOGI(TAG, "Before: SYS_DELAY %" PRId32 ", REF_GAIN %.3f, mux L %u/%u R %u/%u", this->sys_delay_before_,
                this->ref_gain_before_, this->mux_left_before_.category, this->mux_left_before_.source,
                this->mux_right_before_.category, this->mux_right_before_.source);
+      break;
+    }
+    case Action::SETUP_ATTENUATION: {
+      // Only the outputs change; the settings are read for the report.
+      int32_t sys_delay;
+      float ref_gain;
+      ok = xvf::read_mux(this->respeaker_, xvf::kAudioMgrOpLeft, this->mux_left_before_) &&
+           xvf::read_mux(this->respeaker_, xvf::kAudioMgrOpRight, this->mux_right_before_) &&
+           xvf::read_int32(this->respeaker_, xvf::kAudioMgrResid, xvf::kAudioMgrSysDelay, sys_delay) &&
+           xvf::read_float(this->respeaker_, xvf::kAudioMgrResid, xvf::kAudioMgrRefGain, ref_gain);
+      if (ok) {
+        this->before_valid_ = true;
+        this->sys_delay_before_ = sys_delay;
+        this->ref_gain_before_ = ref_gain;
+        this->engine_.set_current_tuning(sys_delay, ref_gain);
+        ok = xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpLeft, {xvf::kMuxMicPostGain, 0}) &&
+             xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpRight, {xvf::kMuxAecResidual, 0});
+      }
       break;
     }
     case Action::SETUP_B:
@@ -352,7 +370,14 @@ void AecTuning::finish_self_test_() {
   if (dropped > 0)
     ESP_LOGW(TAG, "%" PRIu32 " bytes of test audio dropped", dropped);
 
-  if (this->engine_.step() == Step::DONE) {
+  if (this->engine_.step() == Step::DONE && res.attenuation_only) {
+    ESP_LOGI(TAG, "Attenuation test done: SYS_DELAY %d, REF_GAIN %.3f, echo after %.0f ms", res.sys_delay_old,
+             res.ref_gain_old, res.echo_wait_ms);
+    ESP_LOGI(TAG, "  ERLE after 5/10/15/20 s: %.1f / %.1f / %.1f / %.1f dB, converged %d", res.erle_trend[0],
+             res.erle_trend[1], res.erle_trend[2], res.erle_trend[3], res.converged ? 1 : 0);
+    for (size_t k = 0; k < aec_self_test::kBands; k++)
+      ESP_LOGI(TAG, "  %4.0f Hz: ERLE %.1f dB", aec_self_test::kBandHz[k], res.bands[k].erle_db);
+  } else if (this->engine_.step() == Step::DONE) {
     // The test wrote the new values; keep them for the next boot.
     this->sys_delay_ = static_cast<float>(res.sys_delay_new);
     this->saved_.sys_delay = res.sys_delay_new;
@@ -368,8 +393,10 @@ void AecTuning::finish_self_test_() {
              res.ref_gain_new);
     ESP_LOGI(TAG, "  echo to reference %.1f dB, residual delay %.1f ms, usable tail %.0f ms", res.echo_to_ref_db,
              res.residual_ms, res.usable_tail_ms);
-    ESP_LOGI(TAG, "  RT60 %.0f ms, tail coverage %.1f dB, ERLE %.1f dB (bands %.1f), converged %d, warnings 0x%02" PRIx32,
-             res.rt60_ms, res.tail_coverage_db, res.erle_db, res.erle_band_db, res.converged ? 1 : 0, res.warnings);
+    ESP_LOGI(TAG, "  RT60 %.0f ms, tail coverage %.1f dB, converged %d, warnings 0x%02" PRIx32, res.rt60_ms,
+             res.tail_coverage_db, res.converged ? 1 : 0, res.warnings);
+    ESP_LOGI(TAG, "  ERLE after 5/10/15/20 s: %.1f / %.1f / %.1f / %.1f dB (bands %.1f)", res.erle_trend[0],
+             res.erle_trend[1], res.erle_trend[2], res.erle_trend[3], res.erle_band_db);
     for (size_t k = 0; k < aec_self_test::kBands; k++) {
       const aec_self_test::BandResult &band = res.bands[k];
       ESP_LOGI(TAG, "  %4.0f Hz: echo %.1f dB, SNR %.1f dB, RT60 %.0f ms (T%u), ERLE %.1f dB",

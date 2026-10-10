@@ -199,3 +199,40 @@ def test_failures_restore_the_settings(simulator, args, error) -> None:
     assert r["restored"]
     assert r["final_sys_delay"] == SYS_DELAY_BEFORE
     assert r["final_ref_gain"] == pytest.approx(REF_GAIN_BEFORE)
+
+
+def test_attenuation_after_the_settings_change(simulator) -> None:
+    # Phase A moved the echo in the filter: the canceller first leaves more
+    # than the microphone had, then adapts (time constant 3 s).
+    r = run(simulator, "--erle", 20, "--adapt-s", 3, "--noise-dbfs", -80)
+    assert r["step"] == "done"
+    trend = r["erle_trend"]
+    assert trend[0] < trend[1] < trend[2]
+    assert trend[0] < trend[3] - 5
+    assert r["erle_db"] == pytest.approx(20, abs=1.5)
+    assert r["erle_db"] == trend[3]
+
+
+def test_attenuation_test_changes_nothing(simulator) -> None:
+    r = run(simulator, "--attenuation", "--erle", 15, "--noise-dbfs", -80)
+    assert r["step"] == "done" and r["error"] == "none"
+    assert r["attenuation_only"]
+    assert r["erle_db"] == pytest.approx(15, abs=1.0)
+    assert r["final_sys_delay"] == SYS_DELAY_BEFORE
+    assert r["final_ref_gain"] == pytest.approx(REF_GAIN_BEFORE)
+    assert r["sys_delay_new"] == SYS_DELAY_BEFORE
+    assert r["echo_wait_ms"] is not None
+
+
+def test_attenuation_test_waits_for_a_sleeping_amplifier(simulator) -> None:
+    r = run(simulator, "--attenuation", "--switch-ms", 12000)
+    assert r["step"] == "done"
+    # From the pilot's start: the switch plus the output latency and the echo.
+    assert 12000 < r["echo_wait_ms"] < 13000
+
+
+def test_attenuation_test_without_echo(simulator) -> None:
+    r = run(simulator, "--attenuation", "--no-echo")
+    assert r["step"] == "failed" and r["error"] == "no_echo"
+    assert r["restored"]
+

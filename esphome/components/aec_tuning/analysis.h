@@ -21,7 +21,12 @@
 //              the decay.
 //   apply    AUDIO_MGR_SYS_DELAY and AUDIO_MGR_REF_GAIN from phase A
 //   phase B  L = microphone 0 after gain, R = echo canceller residual
-//     noise    8 s: echo attenuation (ERLE), broadband and per band
+//     noise    20 s: echo attenuation (ERLE) after 5, 10, 15 and 20 s, and
+//              per band over the last 5 s. The settings of phase A moved
+//              the echo in the filter, so the canceller adapts anew.
+//
+// The attenuation test (Mode::ATTENUATION) changes no setting: floor, the
+// pilot until the echo is heard, then phase B with the current settings.
 //
 // Every phase A segment is found by its onset in the reference channel, so
 // buffering in the output path never shifts a measurement window.
@@ -80,7 +85,13 @@ constexpr uint32_t kBurstMs = 500;
 constexpr uint32_t kBurstGapMs = 700;
 constexpr uint32_t kToneMs = 1200;
 constexpr uint32_t kDecayMs = 1000;
-constexpr uint32_t kConvergeMs = 8000;
+constexpr uint32_t kConvergeMs = 20000;
+// ERLE windows in phase B, in 10 ms blocks from the noise onset: the first
+// skips the onset, the last ends before the noise.
+constexpr size_t kErleWindows = 4;
+constexpr uint32_t kErleWindowStart[kErleWindows] = {50, 500, 1000, 1500};
+constexpr uint32_t kErleWindowEnd[kErleWindows] = {500, 1000, 1500, 1950};
+constexpr float kErleWindowSeconds[kErleWindows] = {5.0f, 10.0f, 15.0f, 20.0f};
 
 // Correlation window: 4096 reference samples against lags -64..3199
 // (-4..200 ms).
@@ -144,6 +155,8 @@ enum class Action : uint8_t {
                    // the output mux, then SYS_DELAY 0, REF_GAIN
                    // kMeasureRefGain, L (3,0), R (5,0)
   SETUP_B,         // SYS_DELAY and REF_GAIN from the results, R (7,0)
+  SETUP_ATTENUATION,  // read SYS_DELAY and REF_GAIN (set_current_tuning),
+                      // save the output mux, then L (3,0), R (7,0)
   READ_CONVERGED,  // AEC_AECCONVERGED (set_converged)
   RESTORE_MUX,     // the saved output mux
   RESTORE_ALL,     // the saved output mux, SYS_DELAY and REF_GAIN
@@ -207,7 +220,9 @@ struct Results {
   std::array<BandResult, kBands> bands{};
   float rt60_ms{NAN};         // median of 500 Hz to 2 kHz
   float tail_coverage_db{NAN};
-  float erle_db{NAN};         // broadband
+  bool attenuation_only{false};
+  float erle_db{NAN};         // broadband, last window
+  std::array<float, kErleWindows> erle_trend{NAN, NAN, NAN, NAN};  // broadband per window
   float erle_band_db{NAN};    // median over the bands
   bool converged_read{false};
   bool converged{false};
@@ -466,13 +481,17 @@ class Engine {
   /// kBufferSamples of audio memory; it must outlive the engine.
   void set_buffer(int16_t *buffer) { buffer_ = buffer; }
 
+  enum class Mode : uint8_t { FULL, ATTENUATION };
+
   /// Starts a test. Without a buffer the engine fails at once.
-  void start(uint32_t seed = 0x41495649) {
+  void start(Mode mode = Mode::FULL, uint32_t seed = 0x41495649) {
     // Rebuilt in place: a temporary would not fit on the ESP32's loop stack.
     int16_t *buffer = buffer_;
     this->~Engine();
     new (this) Engine();
     buffer_ = buffer;
+    mode_ = mode;
+    results_.attenuation_only = mode == Mode::ATTENUATION;
     seed_ = seed;
     generator_.reset(seed);
     for (size_t k = 0; k < kBands; k++) {
@@ -491,7 +510,7 @@ class Engine {
       bursts_[b].r = buffer_ + b * (kCorrN + kCorrL);
       bursts_[b].l = bursts_[b].r + kCorrN;
     }
-    action_ = Action::SETUP_A;
+    action_ = mode == Mode::FULL ? Action::SETUP_A : Action::SETUP_ATTENUATION;
   }
 
   /// Stops a running test; the saved settings come back.
@@ -578,15 +597,14 @@ class Engine {
     }
     switch (done) {
       case Action::SETUP_A:
+      case Action::SETUP_ATTENUATION:
         reset_input_(ms_in(kSettleMs));
         set_step_(Step::FLOOR);
         break;
       case Action::SETUP_B:
         reset_input_(ms_in(kSettleMs));
         // Starts with silence, so the settle time swallows no noise.
-        generator_.load({{Generator::Kind::SILENCE, 0, ms_out(500)},
-                         {Generator::Kind::NOISE, 0, ms_out(kConvergeMs)},
-                         {Generator::Kind::SILENCE, 0, ms_out(300)}});
+        generator_.load(program_b_());
         set_step_(Step::MEASURE_B);
         break;
       case Action::READ_CONVERGED:
@@ -798,6 +816,16 @@ class Engine {
       floor_[k] /= floor_count_;
     floor_wide_ /= floor_count_;
     results_.floor_dbfs = ms_dbfs(floor_wide_);
+    if (mode_ == Mode::ATTENUATION) {
+      // The reference channel carries the residual: the pilot's echo alone
+      // tells that the speaker plays.
+      generator_.load(program_b_());
+      generator_.start_pilot();
+      reference_seen_ = true;
+      reference_frames_ = 0;
+      set_step_(Step::PILOT);
+      return;
+    }
     std::vector<Generator::Segment> program;
     program.push_back({Generator::Kind::SILENCE, 0, ms_out(500)});
     for (size_t b = 0; b < kBursts; b++) {
@@ -828,7 +856,7 @@ class Engine {
         const uint32_t heard = step_frames_ - (kPilotEchoBlocks - 1) * kBlock;
         results_.echo_wait_ms = (heard > reference_frames_ ? heard - reference_frames_ : 0) * 1000.0f / kInRate;
         generator_.stop_pilot();
-        set_step_(Step::MEASURE_A);
+        set_step_(mode_ == Mode::FULL ? Step::MEASURE_A : Step::MEASURE_B);
         quiet_blocks_ = 0;
       }
     } else {
@@ -921,27 +949,42 @@ class Engine {
     }
   }
 
+  // Phase B: 0.5 s silence, the noise, a short silence.
+  static std::vector<Generator::Segment> program_b_() {
+    return {{Generator::Kind::SILENCE, 0, ms_out(500)},
+            {Generator::Kind::NOISE, 0, ms_out(kConvergeMs)},
+            {Generator::Kind::SILENCE, 0, ms_out(300)}};
+  }
+
   void measure_b_block_() {
     if (!onset_b_) {
-      if (block_lw_ > floor_wide_ * std::pow(10.0, kOnsetBDb / 10.0)) {
+      const double floor = floor_wide_ * std::pow(10.0, kOnsetBDb / 10.0);
+      // Echo still ringing from the pilot or phase A: wait for quiet first.
+      if (!quiet_b_) {
+        quiet_b_ = block_lw_ < floor;
+      } else if (block_lw_ > floor) {
         onset_b_ = true;
         onset_b_blocks_ = 0;
-      } else if (step_frames_ > ms_in(kOnsetBTimeoutMs)) {
-        fail_(Error::NO_ECHO);
       }
+      if (!onset_b_ && step_frames_ > ms_in(kOnsetBTimeoutMs))
+        fail_(Error::NO_ECHO);
       return;
     }
     onset_b_blocks_++;
-    // 4.0 to 7.5 s into the noise: the echo canceller has adapted.
-    if (onset_b_blocks_ > 400 && onset_b_blocks_ <= 750) {
+    for (size_t w = 0; w < kErleWindows; w++) {
+      if (onset_b_blocks_ > kErleWindowStart[w] && onset_b_blocks_ <= kErleWindowEnd[w]) {
+        window_l_[w] += block_lw_;
+        window_r_[w] += block_rw_;
+      }
+    }
+    // Per band over the last window, once the canceller has adapted.
+    if (onset_b_blocks_ > kErleWindowStart[kErleWindows - 1] && onset_b_blocks_ <= kErleWindowEnd[kErleWindows - 1]) {
       for (size_t k = 0; k < kBands; k++) {
         erle_l_[k] += block_l_[k];
         erle_r_[k] += block_r_[k];
       }
-      erle_lw_ += block_lw_;
-      erle_rw_ += block_rw_;
     }
-    if (onset_b_blocks_ == 750) {
+    if (onset_b_blocks_ == kErleWindowEnd[kErleWindows - 1]) {
       set_step_(Step::READ_CONVERGED);
       action_ = Action::READ_CONVERGED;
     }
@@ -1112,11 +1155,16 @@ class Engine {
 
   void finish_b_() {
     Results &res = results_;
-    if (erle_rw_ > 2.0 * erle_lw_) {
+    for (size_t w = 0; w < kErleWindows; w++)
+      res.erle_trend[w] = to_db(window_l_[w] / std::max(window_r_[w], 1e-9));
+    // An adapted canceller never leaves more than the microphone had; while
+    // it adapts it can, so only the last window counts.
+    const size_t last = kErleWindows - 1;
+    if (window_r_[last] > 2.0 * window_l_[last]) {
       fail_(Error::INVALID_MUX);
       return;
     }
-    res.erle_db = to_db(erle_lw_ / std::max(erle_rw_, 1e-9));
+    res.erle_db = res.erle_trend[last];
     std::vector<float> bands;
     for (size_t k = 0; k < kBands; k++) {
       res.bands[k].erle_db = to_db(erle_l_[k] / std::max(erle_r_[k], 1e-9));
@@ -1132,6 +1180,7 @@ class Engine {
   }
 
   uint32_t seed_{0};
+  Mode mode_{Mode::FULL};
   Step step_{Step::IDLE};
   Error error_{Error::NONE};
   Action action_{Action::NONE};
@@ -1178,11 +1227,13 @@ class Engine {
   uint32_t steady_count_{0};
   std::array<Decay, kBands> decays_{};
 
+  bool quiet_b_{false};
   bool onset_b_{false};
   uint32_t onset_b_blocks_{0};
   std::array<double, kBands> erle_l_{};
   std::array<double, kBands> erle_r_{};
-  double erle_lw_{0}, erle_rw_{0};
+  std::array<double, kErleWindows> window_l_{};
+  std::array<double, kErleWindows> window_r_{};
 };
 
 }  // namespace aec_self_test

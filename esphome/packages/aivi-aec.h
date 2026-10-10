@@ -58,8 +58,26 @@ inline std::string status_text(const std::string &status) {
   return "Fehler: " + status;
 }
 
+/// "a / b / c / d dB" of the attenuation after 5, 10, 15 and 20 s.
+inline std::string erle_trend(const Results &r) {
+  std::string text;
+  for (size_t w = 0; w < aec_self_test::kErleWindows; w++)
+    text += (w ? " / " : "") + num(r.erle_trend[w], 1);
+  return text + " dB";
+}
+
 /// The main values in one line.
 inline std::string summary(const Results &r) {
+  if (r.attenuation_only) {
+    std::string text = "Nur gemessen, Werte unverändert: Dämpfung nach 5/10/15/20 s " + erle_trend(r);
+    text += ", SYS_DELAY " + std::to_string(r.sys_delay_old) + ", REF_GAIN " + num(r.ref_gain_old, 2);
+    if (r.converged_read)
+      text += r.converged ? ", eingeschwungen" : ", nicht eingeschwungen";
+    // Normal is about half a second from the pilot's start to its echo.
+    if (std::isfinite(r.echo_wait_ms) && r.echo_wait_ms >= 1500.0f)
+      text += ", Lautsprecher spielte erst nach " + num(r.echo_wait_ms / 1000.0f, 1) + " s";
+    return fit(text);
+  }
   std::string text = "Echo " + num(r.delay_ms, 1) + " ms";
   text += " (Streuung " + std::to_string(r.delay_spread) + " Samples)";
   text += ", SYS_DELAY " + std::to_string(r.sys_delay_old) + " → " + std::to_string(r.sys_delay_new);
@@ -68,7 +86,7 @@ inline std::string summary(const Results &r) {
   text += ", Echo zur Referenz " + num(r.echo_to_ref_db, 1) + " dB";
   text += ", RT60 " + num(r.rt60_ms) + " ms";
   text += ", Filter deckt " + num(r.tail_coverage_db) + " dB Nachhall";
-  text += ", Dämpfung " + num(r.erle_db, 1) + " dB";
+  text += ", Dämpfung nach 5/10/15/20 s " + erle_trend(r);
   if (r.converged_read)
     text += r.converged ? ", eingeschwungen" : ", nicht eingeschwungen";
   // The room speaker started playing the jack only after the pilot began.
@@ -79,6 +97,15 @@ inline std::string summary(const Results &r) {
 
 /// Per band: echo path gain, reverberation time, echo attenuation.
 inline std::string bands(const Results &r) {
+  if (r.attenuation_only) {
+    std::string text = "Dämpfung dB:";
+    for (size_t k = 0; k < aec_self_test::kBands; k++) {
+      const float hz = aec_self_test::kBandHz[k];
+      text += k ? "; " : " ";
+      text += (hz >= 1000.0f ? num(hz / 1000.0f) + " kHz " : num(hz) + " Hz ") + num(r.bands[k].erle_db);
+    }
+    return fit(text);
+  }
   std::string text = "Echo dB / RT60 ms / Dämpfung dB:";
   for (size_t k = 0; k < aec_self_test::kBands; k++) {
     const aec_self_test::BandResult &band = r.bands[k];

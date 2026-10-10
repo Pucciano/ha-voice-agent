@@ -11,9 +11,12 @@
 #                              defaults.
 #   Echounterdrückung          AEC_AECCONVERGED, read every 2 s
 #   eingeschwungen
-#   Selbsttest starten         about 35 s of noise and tones through the jack,
+#   Selbsttest starten         about 45 s of noise and tones through the jack,
 #   Selbsttest abbrechen       recorded by the XVF3800. Needs "Klinke" as the
 #                              output; the room should be quiet.
+#   Echodämpfung messen        about 25 s: the attenuation with the current
+#                              settings only, nothing changes; for comparing
+#                              settings
 #   Selbsttest Status, Ergebnis, Frequenzbänder, Hinweise
 #   Echo-Verzögerung, Nachhallzeit, Echodämpfung, Echo-Abstand zur Referenz
 #
@@ -64,10 +67,13 @@ aec_tuning:
               id(self_test_summary).publish_state(aivi_aec::summary(r));
               id(self_test_bands).publish_state(aivi_aec::bands(r));
               id(self_test_hints).publish_state(aivi_aec::hints(r));
-              id(echo_delay).publish_state(r.delay_ms);
-              id(reverberation_time).publish_state(r.rt60_ms);
               id(echo_attenuation).publish_state(r.erle_db);
-              id(echo_to_reference).publish_state(r.echo_to_ref_db);
+              // The attenuation test measures nothing else.
+              if (!r.attenuation_only) {
+                id(echo_delay).publish_state(r.delay_ms);
+                id(reverberation_time).publish_state(r.rt60_ms);
+                id(echo_to_reference).publish_state(r.echo_to_ref_db);
+              }
           - component.update: aec_sys_delay
           - component.update: aec_ref_gain
           - homeassistant.event:
@@ -75,6 +81,7 @@ aec_tuning:
               data:
                 satellite_id: ${satellite_id}
                 phase: done
+                mode: !lambda 'return id(aec).results().attenuation_only ? "attenuation" : "full";'
                 summary: !lambda return aivi_aec::summary(id(aec).results());
                 bands: !lambda return aivi_aec::bands(id(aec).results());
                 hints: !lambda return aivi_aec::hints(id(aec).results());
@@ -90,6 +97,8 @@ aec_tuning:
                 rt60_ms: !lambda return aivi_aec::num(id(aec).results().rt60_ms);
                 tail_coverage_db: !lambda return aivi_aec::num(id(aec).results().tail_coverage_db, 1);
                 erle_db: !lambda return aivi_aec::num(id(aec).results().erle_db, 1);
+                erle_trend: !lambda return aivi_aec::erle_trend(id(aec).results());
+                echo_wait_ms: !lambda return aivi_aec::num(id(aec).results().echo_wait_ms);
                 erle_band_db: !lambda return aivi_aec::num(id(aec).results().erle_band_db, 1);
                 converged: !lambda 'return id(aec).results().converged ? "true" : "false";'
                 warnings: !lambda return std::to_string(id(aec).results().warnings);
@@ -154,32 +163,57 @@ binary_sensor:
       return converged == 1;
 
 script:
+  # Checks the conditions, then starts the self test or, with
+  # attenuation_only, the attenuation test.
   - id: self_test_start
     mode: single
+    parameters:
+      attenuation_only: bool
     then:
-      - lambda: |-
-          id(assistant_paused) = true;
-          id(self_test_running) = true;
-      - script.execute: stop_local_audio
-      - media_player.stop: aivi_player
-      - text_sensor.template.publish:
-          id: self_test_status
-          state: "Läuft: Lautsprecher auf Analogeingang"
-      # The automation "AIVI Klinkenausgang" switches the room speaker to its
-      # analog input; the test then waits for the echo of its pilot tone.
-      - homeassistant.event:
-          event: esphome.aivi_self_test
-          data:
-            satellite_id: ${satellite_id}
-            phase: start
-      - delay: 2s
       - if:
           condition:
-            lambda: return !id(aec).start_self_test();
+            lambda: |-
+              const char *reason = nullptr;
+              if (id(aec).self_test_running())
+                reason = "läuft bereits";
+              else if (!id(audio_on_jack))
+                reason = "Audioausgabe auf Klinke stellen";
+              else if (id(mic_mute_switch).state)
+                reason = "Mikrofon ist stumm";
+              else if (id(va).is_running())
+                reason = "Assistent arbeitet gerade";
+              else if (id(recording_mode) != 0)
+                reason = "Wake-Word-Aufnahme läuft";
+              else if (!id(api_id).is_connected())
+                reason = "Home Assistant nicht verbunden";
+              if (reason != nullptr)
+                id(self_test_status).publish_state(std::string("Nicht gestartet: ") + reason);
+              return reason == nullptr;
           then:
             - lambda: |-
-                id(assistant_paused) = false;
-                id(self_test_running) = false;
+                id(assistant_paused) = true;
+                id(self_test_running) = true;
+            - script.execute: stop_local_audio
+            - media_player.stop: aivi_player
+            - text_sensor.template.publish:
+                id: self_test_status
+                state: "Läuft: Lautsprecher auf Analogeingang"
+            # The automation "AIVI Klinkenausgang" switches the room speaker
+            # to its analog input; the test then waits for the echo of its
+            # pilot tone.
+            - homeassistant.event:
+                event: esphome.aivi_self_test
+                data:
+                  satellite_id: ${satellite_id}
+                  phase: start
+            - delay: 2s
+            - if:
+                condition:
+                  lambda: return !id(aec).start_self_test(attenuation_only);
+                then:
+                  - lambda: |-
+                      id(assistant_paused) = false;
+                      id(self_test_running) = false;
 
 button:
   - platform: template
@@ -187,25 +221,17 @@ button:
     icon: mdi:sine-wave
     entity_category: config
     on_press:
-      - lambda: |-
-          const char *reason = nullptr;
-          if (id(aec).self_test_running() || id(self_test_start).is_running())
-            reason = "läuft bereits";
-          else if (!id(audio_on_jack))
-            reason = "Audioausgabe auf Klinke stellen";
-          else if (id(mic_mute_switch).state)
-            reason = "Mikrofon ist stumm";
-          else if (id(va).is_running())
-            reason = "Assistent arbeitet gerade";
-          else if (id(recording_mode) != 0)
-            reason = "Wake-Word-Aufnahme läuft";
-          else if (!id(api_id).is_connected())
-            reason = "Home Assistant nicht verbunden";
-          if (reason != nullptr) {
-            id(self_test_status).publish_state(std::string("Nicht gestartet: ") + reason);
-            return;
-          }
-          id(self_test_start).execute();
+      - script.execute:
+          id: self_test_start
+          attenuation_only: false
+  - platform: template
+    name: Echodämpfung messen
+    icon: mdi:volume-minus
+    entity_category: config
+    on_press:
+      - script.execute:
+          id: self_test_start
+          attenuation_only: true
   - platform: template
     name: Selbsttest abbrechen
     icon: mdi:stop
