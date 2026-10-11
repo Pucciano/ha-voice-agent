@@ -1,0 +1,78 @@
+# Home Assistant automation: stop the room speaker's analog input once the
+# AIVI satellite's jack has been idle for 10 minutes (issue #17). It is
+# deployed through the automation config API; keep this copy and Home
+# Assistant in sync.
+#
+# A selected analog input streams without pause, signal or not, and BluOS
+# counts that as playback, so the speaker never puts its amplifier to sleep
+# (BluOS "Amplifier Standby": 15 minutes without playback). Stopping the
+# input lets it sleep. "AIVI Klinkenausgang" (aivi_jack_output.yaml) selects
+# the input again when the jack is needed; a stopped Pulse Flex plays it
+# 1.1-1.4 s after the switch (measured after 2 and after 27 minutes of
+# standstill), and answers start 3.4-5.1 s after the wake word, so nothing
+# of an answer is lost. Music through the satellite starts about a second
+# late on the speaker.
+#
+# Only the analog input is stopped. A speaker that plays anything else is
+# left alone and goes to standby as BluOS decides: network answers (with
+# "Audioausgabe" on the room speaker, the TTS router plays them over the
+# network, which replaces the analog input), Spotify, presets, or a group led
+# by another room.
+#
+# The jack counts as idle when, for 10 minutes each,
+# - the speaker has played the analog input (Home Assistant restarts reset
+#   this, so the speaker keeps the input for 10 minutes after a restart),
+# - the satellite's media player has not played (answers through the jack,
+#   music from Home Assistant or Music Assistant),
+# - the satellite's assist pipeline has not run (wake words, in both output
+#   modes, so a command in progress always finds the speaker playing),
+# - the satellite's self test has not run.
+# An unavailable satellite counts as idle: nothing can use its jack.
+#
+# Checked once a minute, so the speaker stops 10-11 minutes after the last
+# use. List the same rooms as in aivi_jack_output.yaml.
+id: aivi_jack_release
+alias: AIVI Klinkenausgang freigeben
+description: Stoppt den Analogeingang des Raumlautsprechers, wenn die Klinke des AIVI-Satelliten 10 Minuten lang nicht genutzt wurde.
+mode: single
+triggers:
+  - trigger: time_pattern
+    minutes: /1
+variables:
+  idle_minutes: 10
+  # satellite_id -> room speaker and its analog input, and the satellite's
+  # media player, assist satellite and self test status
+  rooms:
+    living_room:
+      speaker: media_player.pulse_flex_living_room_1
+      source: Analog Input
+      player: media_player.wohnung_wohnzimmer_aivi_satellit_audioausgang
+      satellite: assist_satellite.wohnung_wohnzimmer_aivi_satellit_assist_satellit
+      self_test: sensor.wohnung_wohnzimmer_aivi_satellit_selbsttest_status
+  # Speakers whose analog input is idle.
+  release: >-
+    {%- set idle = timedelta(minutes=idle_minutes) -%}
+    {%- set ns = namespace(speakers=[]) -%}
+    {%- for room in rooms.values() -%}
+      {%- set speaker = expand(room.speaker) | first | default(none) -%}
+      {%- set player = expand(room.player) | first | default(none) -%}
+      {%- set satellite = expand(room.satellite) | first | default(none) -%}
+      {%- set test = expand(room.self_test) | first | default(none) -%}
+      {%- if speaker is not none and player is not none and satellite is not none and test is not none
+            and speaker.state == 'playing' and speaker.attributes.source == room.source
+            and now() - speaker.last_changed >= idle
+            and player.state not in ['playing', 'buffering'] and now() - player.last_changed >= idle
+            and satellite.state not in ['listening', 'processing'] and now() - satellite.last_changed >= idle
+            and not test.state.startswith('Läuft') and now() - test.last_changed >= idle -%}
+        {%- set ns.speakers = ns.speakers + [room.speaker] -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ ns.speakers }}
+conditions:
+  - alias: An analog input is idle
+    condition: template
+    value_template: "{{ release | length > 0 }}"
+actions:
+  - action: media_player.media_stop
+    target:
+      entity_id: "{{ release }}"

@@ -69,6 +69,14 @@ the wake word, so a speaker stopped for that long loses nothing of an
 answer. Whether its amplifier had gone to standby after 27 minutes is not
 known; BluOS does not report it.
 
+So `config/homeassistant/aivi_jack_release.yaml` stops the analog input once
+the jack has been idle for 10 minutes: no switch to the input, nothing played
+on `Audioausgang`, no wake word and no self test. The speaker can then sleep
+its amplifier, and the next wake word selects the input again. It stops only
+the analog input, never a network stream: with the satellite's
+`Audioausgabe` on the room speaker, answers play over the network and replace
+the input anyway.
+
 While the jack route is active, the speaker keeps a fixed volume, because the
 echo canceller needs a constant echo path; the loudness is set on the
 satellite's media player `Audioausgang`. Home Assistant can play any media on

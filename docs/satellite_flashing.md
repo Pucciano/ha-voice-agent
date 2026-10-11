@@ -212,20 +212,26 @@ reference.
    `Hide source` off. Home Assistant reads the speaker's inputs every
    15 minutes, so it can take that long until `Analog Input` appears in the
    speaker's source list.
-   `Amplifier Standby` (BluOS app, Settings > Player) can stay on: the
-   speaker puts its amplifier to sleep after 15 minutes without playback,
-   and waking it takes 5-15 seconds (Bluesound support), but the selected
-   analog input counts as playback. Measured on the living room Pulse Flex:
-   after 30 minutes of silence on the analog input it played the self
-   test's pilot at once. Only a speaker that was stopped or paused for
-   15 minutes before a wake word may swallow the start of the answer; if
-   that happens, switch `Amplifier Standby` off.
+   Keep `Amplifier Standby` (BluOS app, Settings > Player) on: the speaker
+   puts its amplifier to sleep after 15 minutes without playback. A selected
+   analog input counts as playback even when silent, so
+   `AIVI Klinkenausgang freigeben` stops the input once the jack has been
+   idle for 10 minutes. Measured on the living room Pulse Flex with
+   `Lautsprecher-Anlauf messen`: stopped for 2 or 27 minutes, it played the
+   input 1.1-1.4 s after the switch, well before an answer starts. If the
+   start of answers goes missing, time the speaker as described in
+   section 7 and, if it starts later than about 3 seconds, switch
+   `Amplifier Standby` off.
 2. Add the room to `config/homeassistant/aivi_jack_output.yaml`
    (`AIVI Klinkenausgang`): an entry under `rooms` with the satellite's device
    id, its `Audioausgabe` select and `Audioausgang` media player, the speaker,
    its analog input and a fixed volume; also list the select and the media
-   player in the two state triggers. Update the automation in Home Assistant
-   with the file content.
+   player in the two state triggers. Add the room to
+   `config/homeassistant/aivi_jack_release.yaml`
+   (`AIVI Klinkenausgang freigeben`) too: the speaker and its analog input,
+   and the satellite's `Audioausgang`, assist satellite and
+   `Selbsttest Status`. Update both automations in Home Assistant with the
+   file content.
 3. Set `Audioausgabe` to `Klinke`. The speaker switches to `Analog Input` and
    gets the fixed volume.
 
@@ -254,6 +260,17 @@ its followers, so no other room plays the satellite's audio. It then checks
 that the speaker reports `Analog Input`, tries once more, and writes a
 warning to the Home Assistant log (logger `aivi_jack_output`) if it still
 does not.
+
+`AIVI Klinkenausgang freigeben` checks every minute and stops the speaker's
+analog input when, for 10 minutes each, the speaker has played the input,
+`Audioausgang` has played nothing, the assist pipeline has not run and the
+self test has not run. It stops only the analog input: whatever else the
+speaker plays (network answers with `Audioausgabe` on the room speaker,
+Spotify, presets, a group led by another room) stays, and BluOS puts the
+speaker to standby on its own. With `Audioausgabe` on the room speaker the
+analog input only carries what `Audioausgang` plays, so it is stopped
+10 minutes after that ends; the same holds for an input left selected after
+switching away from `Klinke`.
 
 How the Pulse Flex treats its analog input (BluOS 4.12, read from the
 speaker's settings):

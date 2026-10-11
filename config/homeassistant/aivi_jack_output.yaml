@@ -26,6 +26,10 @@
 # echo canceller needs a constant echo path, so loudness is set on the
 # satellite's media player. The previous source does not come back.
 #
+# "AIVI Klinkenausgang freigeben" (aivi_jack_release.yaml) stops the input
+# again once the jack has been idle for 10 minutes, so the speaker can put
+# its amplifier to sleep.
+#
 # Only listed rooms, and events only from the satellite's own device.
 id: aivi_jack_output
 alias: AIVI Klinkenausgang
