@@ -9,7 +9,8 @@
 # - a wake word comes from a satellite whose "Audioausgabe" is "Klinke", so
 #   music on the speaker stops before the command and the switch is done
 #   before the answer,
-# - someone sets "Audioausgabe" to "Klinke",
+# - someone sets "Audioausgabe" to "Klinke" (not the satellite coming back
+#   online with "Klinke" restored),
 # - the satellite's media player starts to play,
 # - the satellite's self test starts.
 #
@@ -45,6 +46,9 @@ triggers:
     entity_id:
       - select.wohnung_wohnzimmer_aivi_satellit_audioausgabe
     to: Klinke
+    not_from:
+      - unavailable
+      - unknown
     id: output_select
   - trigger: state
     entity_id:
