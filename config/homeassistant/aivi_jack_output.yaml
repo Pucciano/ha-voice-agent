@@ -17,8 +17,9 @@
 # leaves the group, and a speaker that leads one releases its followers, so
 # no other room plays the satellite's audio. Selecting the input starts a
 # continuous stream of the input at once (BluOS state "stream", about 0.5 s
-# after the call). The automation checks that the speaker reports the input,
-# tries once more, and logs a warning otherwise.
+# after the call). A paused input (button on the speaker) plays nothing, so
+# it is selected again too. The automation checks that the speaker plays the
+# input, tries once more, and logs a warning otherwise.
 #
 # On switching, the speaker gets the room's fixed volume. It stays there: the
 # echo canceller needs a constant echo path, so loudness is set on the
@@ -96,10 +97,10 @@ actions:
           entity_id: "{{ others if state_attr(speaker, 'master') == true else [speaker] }}"
       - wait_template: "{{ (state_attr(speaker, 'group_members') or []) | reject('eq', speaker) | list | length == 0 }}"
         timeout: "00:00:10"
-  - alias: Switch to the analog input
+  - alias: Switch to the analog input, or restart it after a pause
     if:
       - condition: template
-        value_template: "{{ state_attr(speaker, 'source') != room.source }}"
+        value_template: "{{ state_attr(speaker, 'source') != room.source or not is_state(speaker, 'playing') }}"
     then:
       - action: media_player.select_source
         target:
@@ -111,7 +112,7 @@ actions:
           entity_id: "{{ speaker }}"
         data:
           volume_level: "{{ room.volume }}"
-      - wait_template: "{{ state_attr(speaker, 'source') == room.source }}"
+      - wait_template: "{{ state_attr(speaker, 'source') == room.source and is_state(speaker, 'playing') }}"
         timeout: "00:00:05"
       - if:
           - condition: template
@@ -122,7 +123,7 @@ actions:
               entity_id: "{{ speaker }}"
             data:
               source: "{{ room.source }}"
-          - wait_template: "{{ state_attr(speaker, 'source') == room.source }}"
+          - wait_template: "{{ state_attr(speaker, 'source') == room.source and is_state(speaker, 'playing') }}"
             timeout: "00:00:05"
           - if:
               - condition: template
@@ -132,4 +133,4 @@ actions:
                 data:
                   level: warning
                   logger: aivi_jack_output
-                  message: "{{ speaker }} did not switch to {{ room.source }}; answers through the jack of {{ room_id }} stay silent."
+                  message: "{{ speaker }} does not play {{ room.source }}; answers through the jack of {{ room_id }} stay silent."
