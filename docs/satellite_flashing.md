@@ -319,6 +319,18 @@ example `AEC-Verzögerung` at -30 and at 256, or after the speaker sat silent
 on its analog input for more than 15 minutes: if its amplifier slept, the
 result says `Lautsprecher spielte erst nach … s`.
 
+`Lautsprecher-Anlauf messen` times how the room speaker starts to play the
+jack, and changes nothing either. It plays a sweep from 88 Hz to 5.7 kHz,
+repeated every 250 ms, and tells Home Assistant to switch the speaker at the
+moment the sweep starts, as a wake word does. It ends 8 seconds after the
+first echo. `Selbsttest Ergebnis` gives the time from that switch to the
+first sound and to full level (every band within 1 dB of its level at the
+end); `Selbsttest Frequenzbänder` gives the time and the final level per
+band, and `Lautsprecher-Anlaufzeit` keeps the full-level time. The `done`
+event and the log also carry the level of every sweep. To time a sleeping
+amplifier, stop the speaker and wait more than 15 minutes first; nothing may
+select its analog input meanwhile, not even a wake word.
+
 The test changes only the two AEC values; it stores them on the satellite,
 which writes them at every boot. Level advice stays advice, because the
 volume and the microphone gain also change what the wake word and speech
