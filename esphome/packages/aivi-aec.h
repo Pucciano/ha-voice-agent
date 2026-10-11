@@ -41,6 +41,7 @@ inline std::string status_text(const std::string &status) {
   if (status == "running:setup") return "Läuft: Vorbereitung";
   if (status == "running:noise_floor") return "Läuft: Ruhepegel";
   if (status == "running:pilot") return "Läuft: Warte auf das Echo vom Analogeingang";
+  if (status == "running:warmup") return "Läuft: Sweep, Lautsprecher schaltet auf den Analogeingang";
   if (status == "running:delay_and_tones") return "Läuft: Verzögerung, Töne und Nachhall";
   if (status == "running:apply") return "Läuft: Werte anwenden";
   if (status == "running:attenuation") return "Läuft: Echodämpfung";
@@ -66,8 +67,46 @@ inline std::string erle_trend(const Results &r) {
   return text + " dB";
 }
 
+/// Test of the script parameter: "full", "attenuation" or "warmup".
+inline aec_self_test::Engine::Mode test_mode(const std::string &test) {
+  if (test == "attenuation")
+    return aec_self_test::Engine::Mode::ATTENUATION;
+  if (test == "warmup")
+    return aec_self_test::Engine::Mode::WARMUP;
+  return aec_self_test::Engine::Mode::FULL;
+}
+
+/// Comma separated values for events, "–" for unknown ones.
+template<typename F> std::string list(size_t count, F value) {
+  std::string text;
+  for (size_t i = 0; i < count; i++)
+    text += (i ? "," : "") + value(i);
+  return text;
+}
+
+/// Warm-up test: ms from the switch to full level, per band.
+inline std::string warmup_band_ready(const Results &r) {
+  return list(aec_self_test::kBands, [&r](size_t k) { return num(r.bands[k].ready_ms); });
+}
+/// Warm-up test: final echo level per band, dBFS.
+inline std::string warmup_band_levels(const Results &r) {
+  return list(aec_self_test::kBands, [&r](size_t k) { return num(r.bands[k].level_dbfs, 1); });
+}
+/// Warm-up test: broadband level per sweep relative to the final level, dB.
+inline std::string warmup_ramp(const Results &r) {
+  return list(r.warmup_windows, [&r](size_t w) { return std::to_string(r.warmup_ramp_db[w]); });
+}
+
 /// The main values in one line.
 inline std::string summary(const Results &r) {
+  if (r.warmup) {
+    std::string text = "Ab dem Umschaltbefehl: erster Ton nach " + num(r.warmup_onset_ms / 1000.0f, 2) + " s";
+    text += ", volle Lautstärke (±1 dB) nach " + num(r.warmup_ready_ms / 1000.0f, 2) + " s";
+    text += ", Sweep alle " + std::to_string(aec_self_test::kSweepMs) + " ms";
+    if (!r.warmup_settled)
+      text += ", Pegel am Ende nicht stabil";
+    return fit(text);
+  }
   if (r.attenuation_only) {
     std::string text = "Nur gemessen, Werte unverändert: Dämpfung nach 5/10/15/20 s " + erle_trend(r);
     text += ", SYS_DELAY " + std::to_string(r.sys_delay_old) + ", REF_GAIN " + num(r.ref_gain_old, 2);
@@ -97,6 +136,16 @@ inline std::string summary(const Results &r) {
 
 /// Per band: echo path gain, reverberation time, echo attenuation.
 inline std::string bands(const Results &r) {
+  if (r.warmup) {
+    std::string text = "Volle Lautstärke ab s / Pegel dBFS:";
+    for (size_t k = 0; k < aec_self_test::kBands; k++) {
+      const float hz = aec_self_test::kBandHz[k];
+      text += k ? "; " : " ";
+      text += hz >= 1000.0f ? num(hz / 1000.0f) + " kHz " : num(hz) + " Hz ";
+      text += num(r.bands[k].ready_ms / 1000.0f, 2) + "/" + num(r.bands[k].level_dbfs);
+    }
+    return fit(text);
+  }
   if (r.attenuation_only) {
     std::string text = "Dämpfung dB:";
     for (size_t k = 0; k < aec_self_test::kBands; k++) {
@@ -143,6 +192,8 @@ inline std::string hints(const Results &r) {
     add("Echodämpfung unter 10 dB");
   if (r.warnings & aec_self_test::WARN_REF_CLIPPED)
     add("Referenz übersteuert, REF_GAIN bleibt");
+  if (r.warnings & aec_self_test::WARN_UNSETTLED)
+    add("Pegel am Ende nicht stabil: Messung wiederholen");
   return fit(text.empty() ? "Keine" : text);
 }
 

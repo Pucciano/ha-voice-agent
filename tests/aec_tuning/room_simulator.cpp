@@ -11,7 +11,7 @@
 //                  [--noise-dbfs DB] [--ref-gain G] [--sys-delay N] [--ref-path-db DB]
 //                  [--latency-ms MS] [--switch-ms MS] [--unstable]
 //                  [--no-reference] [--no-echo] [--abort-ms MS]
-//                  [--adapt-s S] [--attenuation]
+//                  [--adapt-s S] [--attenuation] [--warmup] [--ramp-ms MS]
 
 #include "analysis.h"
 
@@ -39,12 +39,15 @@ struct Options {
   float ref_path_db = 0.0f;   // gain from the generator to the reference, before REF_GAIN
   float latency_ms = 250.0f;  // generator to reference
   float switch_ms = 0.0f;     // speaker silent this long after the first reference
+                              // (warm-up test: after the test's start)
+  float ramp_ms = 0.0f;       // then it fades in from -30 dB over this time
   bool unstable = false;      // the echo delay grows by 80 samples per burst
   bool no_reference = false;  // playback never reaches the XVF3800
   bool no_echo = false;       // the speaker does not play the jack
   float abort_ms = -1.0f;
   float adapt_s = 0.0f;       // the canceller adapts with this time constant after a change
   bool attenuation = false;   // the attenuation test instead of the full one
+  bool warmup = false;        // the warm-up test instead of the full one
 };
 
 Options parse(int argc, char **argv) {
@@ -65,6 +68,8 @@ Options parse(int argc, char **argv) {
     else if (arg == "--abort-ms") o.abort_ms = next();
     else if (arg == "--adapt-s") o.adapt_s = next();
     else if (arg == "--attenuation") o.attenuation = true;
+    else if (arg == "--warmup") o.warmup = true;
+    else if (arg == "--ramp-ms") o.ramp_ms = next();
     else if (arg == "--unstable") o.unstable = true;
     else if (arg == "--no-reference") o.no_reference = true;
     else if (arg == "--no-echo") o.no_echo = true;
@@ -169,7 +174,9 @@ int main(int argc, char **argv) {
   std::vector<int16_t> buffer(kBufferSamples);
   Engine engine;
   engine.set_buffer(buffer.data());
-  engine.start(o.attenuation ? Engine::Mode::ATTENUATION : Engine::Mode::FULL);
+  engine.start(o.warmup        ? Engine::Mode::WARMUP
+               : o.attenuation ? Engine::Mode::ATTENUATION
+                               : Engine::Mode::FULL);
 
   // Simulated XVF3800 state.
   enum class Mux { DEFAULT, PHASE_A, PHASE_B } mux = Mux::DEFAULT;
@@ -193,6 +200,7 @@ int main(int argc, char **argv) {
   reference_history.reserve(1 << 20);
 
   long first_reference = -1;
+  long warmup_start = -1;  // input index at the warm-up step's start
   long input_index = 0;
   const long max_frames = 180L * kInRate;
   int16_t out48[480];
@@ -218,6 +226,11 @@ int main(int argc, char **argv) {
       case Action::SETUP_ATTENUATION:
         engine.set_current_tuning(sys_delay, ref_gain);
         mux = Mux::PHASE_B;
+        engine.action_done(true);
+        break;
+      case Action::SETUP_WARMUP:
+        engine.set_current_tuning(sys_delay, ref_gain);
+        mux = Mux::PHASE_A;
         engine.action_done(true);
         break;
       case Action::READ_CONVERGED:
@@ -248,6 +261,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 480; i++)
       x48[i] = out48[i];
 
+    if (warmup_start < 0 && engine.step() == Step::WARMUP)
+      warmup_start = input_index;
+
     for (int i = 0; i < 160; i++) {
       output_path.push_back(decimator.push3(x48 + 3 * i));
       const double reference = o.no_reference ? 0.0 : output_path.front();
@@ -264,11 +280,13 @@ int main(int argc, char **argv) {
       double played = source >= 0 ? reference_history[source] : 0.0;
       // The speaker plays its input only from the switch on; what it plays
       // reaches the microphone one echo delay later.
-      const bool speaker_on = !o.no_echo && !o.no_reference &&
-                              (first_reference < 0 ||
-                               source - first_reference >= o.switch_ms * kInRate / 1000.0f);
+      const long switch_from = o.warmup ? warmup_start : first_reference;
+      const double on_for = switch_from < 0 ? 0.0 : source - switch_from - o.switch_ms * kInRate / 1000.0;
+      const bool speaker_on = !o.no_echo && !o.no_reference && (o.warmup ? switch_from >= 0 && on_for >= 0 : on_for >= 0);
       if (!speaker_on)
         played = 0.0;
+      else if (o.ramp_ms > 0.0f && on_for < o.ramp_ms * kInRate / 1000.0)
+        played *= std::pow(10.0, -30.0 * (1.0 - on_for / (o.ramp_ms * kInRate / 1000.0)) / 20.0);
       const double room = echo_gain * (played + 0.6 * reverb.process(played));
       const double mic = room + noise_rms * gauss(rng);
 
@@ -356,6 +374,15 @@ int main(int argc, char **argv) {
                 k ? "," : "", kBandHz[k], num(b.ref_dbfs).c_str(), num(b.echo_gain_db).c_str(),
                 num(b.snr_db).c_str(), num(b.rt60_ms).c_str(), b.rt_range_db, num(b.erle_db).c_str());
   }
-  std::printf("],\"input_ms\":%u}\n", engine.input_ms());
+  std::printf("],\"warmup\":%s,\"warmup_ref_ms\":%s,\"warmup_onset_ms\":%s,\"warmup_ready_ms\":%s,"
+              "\"warmup_settled\":%s,\"warmup_band_ready_ms\":[",
+              r.warmup ? "true" : "false", num(r.warmup_ref_ms).c_str(), num(r.warmup_onset_ms).c_str(),
+              num(r.warmup_ready_ms).c_str(), r.warmup_settled ? "true" : "false");
+  for (size_t k = 0; k < kBands; k++)
+    std::printf("%s%s", k ? "," : "", num(r.bands[k].ready_ms).c_str());
+  std::printf("],\"warmup_ramp_db\":[");
+  for (size_t w = 0; w < r.warmup_windows; w++)
+    std::printf("%s%d", w ? "," : "", r.warmup_ramp_db[w]);
+  std::printf("],\"warmup_switch_index\":%ld,\"input_ms\":%u}\n", warmup_start, engine.input_ms());
   return 0;
 }

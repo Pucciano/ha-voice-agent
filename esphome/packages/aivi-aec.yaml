@@ -17,8 +17,15 @@
 #   Echodämpfung messen        about 25 s: the attenuation with the current
 #                              settings only, nothing changes; for comparing
 #                              settings
+#   Lautsprecher-Anlauf messen a repeating sweep, from the moment Home
+#                              Assistant is told to switch the room speaker
+#                              until 8 s after its first echo: when it plays
+#                              and when every band is at full level. Nothing
+#                              changes; start it with the speaker stopped for
+#                              more than 15 min to time a sleeping amplifier.
 #   Selbsttest Status, Ergebnis, Frequenzbänder, Hinweise
-#   Echo-Verzögerung, Nachhallzeit, Echodämpfung, Echo-Abstand zur Referenz
+#   Echo-Verzögerung, Nachhallzeit, Echodämpfung, Echo-Abstand zur Referenz,
+#   Lautsprecher-Anlaufzeit
 #
 # The self test measures the echo delay, the echo path per band, the
 # reverberation time and the echo attenuation (see
@@ -27,7 +34,9 @@
 # change what the wake word and speech recognition hear.
 #
 # Events to Home Assistant, each with the satellite_id:
-#   esphome.aivi_self_test   phase start, done (with all values) or error
+#   esphome.aivi_self_test   phase start, done (with all values) or error;
+#                            the warm-up test sends start when its sweep
+#                            starts, so its times count from the switch
 #
 # Requires aivi-audio-output.yaml (self_test_mixing_input, aivi_player,
 # stop_local_audio), aivi-voice-input.yaml (assistant_paused, va),
@@ -60,6 +69,17 @@ aec_tuning:
     - lambda: id(self_test_status).publish_state(aivi_aec::status_text(status));
     - if:
         condition:
+          lambda: return status == "running:warmup";
+        then:
+          # The automation "AIVI Klinkenausgang" switches the room speaker
+          # now, while the sweep starts.
+          - homeassistant.event:
+              event: esphome.aivi_self_test
+              data:
+                satellite_id: ${satellite_id}
+                phase: start
+    - if:
+        condition:
           lambda: return status == "done";
         then:
           - lambda: |-
@@ -67,15 +87,49 @@ aec_tuning:
               id(self_test_summary).publish_state(aivi_aec::summary(r));
               id(self_test_bands).publish_state(aivi_aec::bands(r));
               id(self_test_hints).publish_state(aivi_aec::hints(r));
-              id(echo_attenuation).publish_state(r.erle_db);
-              // The attenuation test measures nothing else.
-              if (!r.attenuation_only) {
-                id(echo_delay).publish_state(r.delay_ms);
-                id(reverberation_time).publish_state(r.rt60_ms);
-                id(echo_to_reference).publish_state(r.echo_to_ref_db);
+              if (r.warmup) {
+                id(speaker_warmup_time).publish_state(r.warmup_ready_ms / 1000.0f);
+              } else {
+                id(echo_attenuation).publish_state(r.erle_db);
+                // The attenuation test measures nothing else.
+                if (!r.attenuation_only) {
+                  id(echo_delay).publish_state(r.delay_ms);
+                  id(reverberation_time).publish_state(r.rt60_ms);
+                  id(echo_to_reference).publish_state(r.echo_to_ref_db);
+                }
               }
           - component.update: aec_sys_delay
           - component.update: aec_ref_gain
+    - if:
+        condition:
+          lambda: return status == "done" && id(aec).results().warmup;
+        then:
+          - homeassistant.event:
+              event: esphome.aivi_self_test
+              data:
+                satellite_id: ${satellite_id}
+                phase: done
+                mode: warmup
+                summary: !lambda return aivi_aec::summary(id(aec).results());
+                bands: !lambda return aivi_aec::bands(id(aec).results());
+                hints: !lambda return aivi_aec::hints(id(aec).results());
+                ref_ms: !lambda return aivi_aec::num(id(aec).results().warmup_ref_ms);
+                onset_ms: !lambda return aivi_aec::num(id(aec).results().warmup_onset_ms);
+                ready_ms: !lambda return aivi_aec::num(id(aec).results().warmup_ready_ms);
+                settled: !lambda 'return id(aec).results().warmup_settled ? "true" : "false";'
+                band_ready_ms: !lambda return aivi_aec::warmup_band_ready(id(aec).results());
+                band_level_dbfs: !lambda return aivi_aec::warmup_band_levels(id(aec).results());
+                # Broadband level of every sweep relative to the final one;
+                # sweep w is heard at ramp_first_ms + w * ramp_step_ms.
+                ramp_db: !lambda return aivi_aec::warmup_ramp(id(aec).results());
+                ramp_first_ms: !lambda return aivi_aec::num(id(aec).results().warmup_window_ms(0, aec_self_test::kBands));
+                ramp_step_ms: !lambda return std::to_string(aec_self_test::kSweepMs);
+                floor_dbfs: !lambda return aivi_aec::num(id(aec).results().floor_dbfs, 1);
+                warnings: !lambda return std::to_string(id(aec).results().warnings);
+    - if:
+        condition:
+          lambda: return status == "done" && !id(aec).results().warmup;
+        then:
           - homeassistant.event:
               event: esphome.aivi_self_test
               data:
@@ -163,12 +217,12 @@ binary_sensor:
       return converged == 1;
 
 script:
-  # Checks the conditions, then starts the self test or, with
-  # attenuation_only, the attenuation test.
+  # Checks the conditions, then starts a test: "full" (the self test),
+  # "attenuation" or "warmup".
   - id: self_test_start
     mode: single
     parameters:
-      attenuation_only: bool
+      test: string
     then:
       - if:
           condition:
@@ -195,21 +249,26 @@ script:
                 id(self_test_running) = true;
             - script.execute: stop_local_audio
             - media_player.stop: aivi_player
-            - text_sensor.template.publish:
-                id: self_test_status
-                state: "Läuft: Lautsprecher auf Analogeingang"
             # The automation "AIVI Klinkenausgang" switches the room speaker
             # to its analog input; the test then waits for the echo of its
-            # pilot tone.
-            - homeassistant.event:
-                event: esphome.aivi_self_test
-                data:
-                  satellite_id: ${satellite_id}
-                  phase: start
-            - delay: 2s
+            # pilot tone. The warm-up test sends the event itself, when its
+            # sweep starts.
             - if:
                 condition:
-                  lambda: return !id(aec).start_self_test(attenuation_only);
+                  lambda: return test != "warmup";
+                then:
+                  - text_sensor.template.publish:
+                      id: self_test_status
+                      state: "Läuft: Lautsprecher auf Analogeingang"
+                  - homeassistant.event:
+                      event: esphome.aivi_self_test
+                      data:
+                        satellite_id: ${satellite_id}
+                        phase: start
+                  - delay: 2s
+            - if:
+                condition:
+                  lambda: return !id(aec).start_self_test(aivi_aec::test_mode(test));
                 then:
                   - lambda: |-
                       id(assistant_paused) = false;
@@ -223,7 +282,7 @@ button:
     on_press:
       - script.execute:
           id: self_test_start
-          attenuation_only: false
+          test: full
   - platform: template
     name: Echodämpfung messen
     icon: mdi:volume-minus
@@ -231,7 +290,15 @@ button:
     on_press:
       - script.execute:
           id: self_test_start
-          attenuation_only: true
+          test: attenuation
+  - platform: template
+    name: Lautsprecher-Anlauf messen
+    icon: mdi:speaker-play
+    entity_category: config
+    on_press:
+      - script.execute:
+          id: self_test_start
+          test: warmup
   - platform: template
     name: Selbsttest abbrechen
     icon: mdi:stop
@@ -296,6 +363,14 @@ sensor:
     icon: mdi:volume-minus
     unit_of_measurement: dB
     accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: speaker_warmup_time
+    name: Lautsprecher-Anlaufzeit
+    icon: mdi:speaker-play
+    unit_of_measurement: s
+    accuracy_decimals: 2
     entity_category: diagnostic
     update_interval: never
   - platform: template

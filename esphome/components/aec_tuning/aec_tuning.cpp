@@ -163,7 +163,7 @@ void AecTuning::poll_converged_() {
 
 // --- Self test ---
 
-bool AecTuning::start_self_test(bool attenuation_only) {
+bool AecTuning::start_self_test(Engine::Mode mode) {
   if (this->testing_) {
     ESP_LOGW(TAG, "A self test is already running");
     return false;
@@ -182,7 +182,7 @@ bool AecTuning::start_self_test(bool attenuation_only) {
   this->ring_buffer_->reset();
 
   this->engine_.set_buffer(this->engine_buffer_);
-  this->engine_.start(attenuation_only ? Engine::Mode::ATTENUATION : Engine::Mode::FULL);
+  this->engine_.start(mode);
   this->before_valid_ = false;
   this->out_bytes_ = this->out_offset_ = 0;
   this->dropped_bytes_.store(0, std::memory_order_relaxed);
@@ -199,7 +199,9 @@ bool AecTuning::start_self_test(bool attenuation_only) {
   this->speaker_->start();
   this->capturing_.store(true, std::memory_order_release);
   this->microphone_source_->start();
-  ESP_LOGI(TAG, attenuation_only ? "Attenuation test started" : "Self test started");
+  ESP_LOGI(TAG, "%s started", mode == Engine::Mode::FULL          ? "Self test"
+                               : mode == Engine::Mode::ATTENUATION ? "Attenuation test"
+                                                                   : "Speaker warm-up test");
   return true;
 }
 
@@ -271,7 +273,8 @@ void AecTuning::run_action_() {
                this->mux_right_before_.category, this->mux_right_before_.source);
       break;
     }
-    case Action::SETUP_ATTENUATION: {
+    case Action::SETUP_ATTENUATION:
+    case Action::SETUP_WARMUP: {
       // Only the outputs change; the settings are read for the report.
       int32_t sys_delay;
       float ref_gain;
@@ -284,8 +287,9 @@ void AecTuning::run_action_() {
         this->sys_delay_before_ = sys_delay;
         this->ref_gain_before_ = ref_gain;
         this->engine_.set_current_tuning(sys_delay, ref_gain);
+        const uint8_t right = action == Action::SETUP_WARMUP ? xvf::kMuxRefPostGain : xvf::kMuxAecResidual;
         ok = xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpLeft, {xvf::kMuxMicPostGain, 0}) &&
-             xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpRight, {xvf::kMuxAecResidual, 0});
+             xvf::write_mux(this->respeaker_, xvf::kAudioMgrOpRight, {right, 0});
       }
       break;
     }
@@ -376,7 +380,31 @@ void AecTuning::finish_self_test_() {
   if (dropped > 0)
     ESP_LOGW(TAG, "%" PRIu32 " bytes of test audio dropped", dropped);
 
-  if (this->engine_.step() == Step::DONE && res.attenuation_only) {
+  if (this->engine_.step() == Step::DONE && res.warmup) {
+    ESP_LOGI(TAG, "Speaker warm-up test done, ms from the switch: reference %.0f, first echo %.0f, full level %.0f%s",
+             res.warmup_ref_ms, res.warmup_onset_ms, res.warmup_ready_ms, res.warmup_settled ? "" : " (not settled)");
+    for (size_t k = 0; k < aec_self_test::kBands; k++) {
+      const aec_self_test::BandResult &band = res.bands[k];
+      ESP_LOGI(TAG, "  %4.0f Hz: full level at %.0f ms, %.1f dBFS, SNR %.1f dB", aec_self_test::kBandHz[k],
+               band.ready_ms, band.level_dbfs, band.snr_db);
+    }
+    // Per band, the level of every sweep relative to the final one; sweep w
+    // of band k is heard at warmup_window_ms(w, k).
+    ESP_LOGI(TAG, "  %u sweeps of %u ms, first at %.0f ms (+%.0f ms per band)", res.warmup_windows,
+             static_cast<unsigned>(aec_self_test::kSweepMs), res.warmup_window_ms(0, 0),
+             aec_self_test::kSweepMs / static_cast<float>(aec_self_test::kBands));
+    for (size_t k = 0; k <= aec_self_test::kBands; k++) {
+      const auto &levels = k < aec_self_test::kBands ? res.warmup_band_db[k] : res.warmup_ramp_db;
+      for (size_t from = 0; from < res.warmup_windows; from += 40) {
+        std::string line;
+        for (size_t w = from; w < std::min<size_t>(res.warmup_windows, from + 40); w++)
+          line += (w > from ? "," : "") + std::to_string(levels[w]);
+        ESP_LOGI(TAG, "  %s %3u: %s", k < aec_self_test::kBands ? "band" : "wide",
+                 static_cast<unsigned>(k < aec_self_test::kBands ? aec_self_test::kBandHz[k] : 0),
+                 line.c_str());
+      }
+    }
+  } else if (this->engine_.step() == Step::DONE && res.attenuation_only) {
     ESP_LOGI(TAG, "Attenuation test done: SYS_DELAY %d, REF_GAIN %.3f, echo after %.0f ms", res.sys_delay_old,
              res.ref_gain_old, res.echo_wait_ms);
     ESP_LOGI(TAG, "  ERLE after 5/10/15/20 s: %.1f / %.1f / %.1f / %.1f dB, converged %d", res.erle_trend[0],

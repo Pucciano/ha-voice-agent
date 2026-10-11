@@ -68,9 +68,10 @@ class AecTuning final : public Component
   /// AEC_AECCONVERGED, read every 2 s: 1, 0, or -1 while unknown.
   int converged() const { return this->converged_; }
 
-  /// Starts the self test, or with attenuation_only the attenuation test,
-  /// which changes no setting; false if one runs or the parts are missing.
-  bool start_self_test(bool attenuation_only = false);
+  /// Starts the self test, the attenuation test or the speaker warm-up
+  /// test (the last two change no setting); false if one runs or the parts
+  /// are missing.
+  bool start_self_test(aec_self_test::Engine::Mode mode = aec_self_test::Engine::Mode::FULL);
   /// Stops a running self test; the saved settings come back.
   void abort_self_test();
   bool self_test_running() const { return this->testing_; }

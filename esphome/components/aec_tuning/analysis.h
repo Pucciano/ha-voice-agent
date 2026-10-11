@@ -28,6 +28,17 @@
 // The attenuation test (Mode::ATTENUATION) changes no setting: floor, the
 // pilot until the echo is heard, then phase B with the current settings.
 //
+// The warm-up test (Mode::WARMUP) changes no setting either. It times how
+// the room speaker starts to play its analog input: L = microphone 0 after
+// gain, R = reference after gain.
+//     floor    1 s silence
+//     warmup   a logarithmic sweep over the six octaves, repeated every
+//              250 ms. The step's start is the moment Home Assistant is told
+//              to switch the speaker; the test reports when the first echo
+//              arrives and, per band, from which sweep on the echo stays
+//              within 1 dB of its final level (the median of the last 2 s).
+//              It ends 8 s after the first echo.
+//
 // Every phase A segment is found by its onset in the reference channel, so
 // buffering in the output path never shifts a measurement window.
 #pragma once
@@ -122,6 +133,29 @@ constexpr uint32_t kNoEchoMs = 20000;
 constexpr uint32_t kSegmentTimeoutMs = 4000;
 constexpr uint32_t kOnsetBTimeoutMs = 3000;
 
+// Warm-up test. The sweep runs over the octaves of the six bands, one
+// octave per kSweepMs / 6; every band's pass is timed by its own window.
+constexpr float kSweepLowHz = 88.39f;    // lower edge of the 125 Hz octave
+constexpr float kSweepHighHz = 5656.9f;  // upper edge of the 4 kHz octave
+constexpr uint32_t kSweepMs = 250;
+constexpr uint32_t kSweepBlocks = kSweepMs / 10;
+// The windows center on the echo of a pass: the Pulse Flex's analog input
+// delays by about 51 ms, and a window tolerates +-125 ms around this guess.
+constexpr float kWarmupEchoGuessMs = 55.0f;
+constexpr uint32_t kWarmupMaxOnsetMs = 25000;   // no echo by then: no_echo
+constexpr uint32_t kWarmupAfterOnsetMs = 8000;  // the final level needs time to settle
+constexpr size_t kWarmupWindows = (kWarmupMaxOnsetMs + kWarmupAfterOnsetMs) / kSweepMs + 4;
+constexpr size_t kWarmupFinalWindows = 8;       // the last 2 s give the final level
+constexpr float kWarmupHeardDb = 15.0f;         // a band over its floor
+constexpr uint32_t kWarmupHeardBlocks = 3;
+constexpr float kWarmupReadyDb = 1.0f;
+constexpr float kWarmupSettledDb = 2.0f;        // spread of the last 2 s
+constexpr float kWarmupMinSnrDb = 12.0f;        // quieter bands are not timed
+constexpr uint32_t kWarmupFadeTimeoutMs = 2000;
+
+/// Middle of band k's pass within a sweep, ms from the sweep's start.
+constexpr float sweep_pass_ms(size_t k) { return (k + 0.5f) * kSweepMs / kBands; }
+
 // Reverberation fit on the Schroeder curve.
 constexpr float kFitStartDb = -5.0f;
 constexpr uint32_t kDecayBlocks = 120;  // stored per tone, from the reference's end
@@ -139,6 +173,7 @@ enum class Step : uint8_t {
   SETUP_A,
   FLOOR,
   PILOT,
+  WARMUP,
   MEASURE_A,
   SETUP_B,
   MEASURE_B,
@@ -157,6 +192,7 @@ enum class Action : uint8_t {
   SETUP_B,         // SYS_DELAY and REF_GAIN from the results, R (7,0)
   SETUP_ATTENUATION,  // read SYS_DELAY and REF_GAIN (set_current_tuning),
                       // save the output mux, then L (3,0), R (7,0)
+  SETUP_WARMUP,       // the same, but R (5,0)
   READ_CONVERGED,  // AEC_AECCONVERGED (set_converged)
   RESTORE_MUX,     // the saved output mux
   RESTORE_ALL,     // the saved output mux, SYS_DELAY and REF_GAIN
@@ -183,6 +219,7 @@ enum Warning : uint32_t {
   WARN_NOT_CONVERGED = 1 << 6,
   WARN_LOW_ERLE = 1 << 7,        // under 10 dB
   WARN_REF_CLIPPED = 1 << 8,     // the reference clipped: REF_GAIN not changed
+  WARN_UNSETTLED = 1 << 9,       // warm-up: the level still moved in the last 2 s
 };
 
 struct BandResult {
@@ -192,6 +229,8 @@ struct BandResult {
   float rt60_ms{NAN};
   uint8_t rt_range_db{0};   // 20 (T20), 10 (T10) or 0 (not measurable)
   float erle_db{NAN};
+  float ready_ms{NAN};      // warm-up: test start to the first pass at full level
+  float level_dbfs{NAN};    // warm-up: final echo level, mean over a sweep
 };
 
 struct Results {
@@ -227,6 +266,27 @@ struct Results {
   bool converged_read{false};
   bool converged{false};
   uint32_t warnings{0};
+
+  // Warm-up test; times in ms from the test start, when Home Assistant is
+  // told to switch the speaker.
+  bool warmup{false};
+  float warmup_ref_ms{NAN};    // the sweep reaches the reference
+  float warmup_onset_ms{NAN};  // the microphone hears the first echo
+  float warmup_ready_ms{NAN};  // the last timed band is at full level
+  bool warmup_settled{false};
+  // Echo level per sweep relative to the final level, dB (-99 for nothing):
+  // broadband and per band. Window w of band k is the pass at
+  // warmup_window_ms(w, k).
+  uint8_t warmup_windows{0};
+  std::array<int8_t, kWarmupWindows> warmup_ramp_db{};
+  std::array<std::array<int8_t, kWarmupWindows>, kBands> warmup_band_db{};
+
+  /// Time of band k's pass in sweep w, ms from the test start; the
+  /// broadband ramp uses the middle of the sweep (k = kBands).
+  float warmup_window_ms(size_t w, size_t k) const {
+    const float pass = k < kBands ? sweep_pass_ms(k) : kSweepMs / 2.0f;
+    return warmup_ref_ms + w * static_cast<float>(kSweepMs) + pass + kWarmupEchoGuessMs;
+  }
 };
 
 /// Biquad band pass (RBJ, 0 dB peak gain).
@@ -261,7 +321,7 @@ class BandPass {
 /// program; segments follow each other without gaps.
 class Generator {
  public:
-  enum class Kind : uint8_t { SILENCE, NOISE, TONE };
+  enum class Kind : uint8_t { SILENCE, NOISE, TONE, SWEEP };
   struct Segment {
     Kind kind;
     float hz;
@@ -297,6 +357,14 @@ class Generator {
     }
   }
   bool playing() const { return pilot_ || index_ < program_.size(); }
+  /// Fades the current segment out over 10 ms and ends the program.
+  void fade_out() {
+    if (index_ >= program_.size())
+      return;
+    Segment &segment = program_[index_];
+    segment.samples = std::min(segment.samples, position_ + kToneRamp);
+    program_.resize(index_ + 1);
+  }
 
   /// Up to n samples; fewer once the program has ended.
   size_t read(int16_t *out, size_t n) {
@@ -367,6 +435,19 @@ class Generator {
     return sine_(hz * (1.0f + kWarbleDepth * std::sin(kTwoPi * t)));
   }
 
+  float sweep_(uint32_t position) {
+    // Exponential: the frequency grows by a constant factor per sample. The
+    // phase runs on, so the jump back to the low edge does not click.
+    constexpr uint32_t kPeriod = ms_out(kSweepMs);
+    if (position % kPeriod == 0) {
+      sweep_hz_ = kSweepLowHz;
+      sweep_step_ = std::pow(kSweepHighHz / kSweepLowHz, 1.0f / kPeriod);
+    }
+    const float value = sine_(sweep_hz_);
+    sweep_hz_ *= sweep_step_;
+    return value;
+  }
+
   float pilot_sample_() {
     float gain = 1.0f;
     if (pilot_position_ < kToneRamp) {
@@ -389,6 +470,8 @@ class Generator {
         return kNoiseRms * gaussian() * ramp(position, segment.samples, kNoiseRamp);
       case Kind::TONE:
         return kTonePeak * warble_(segment.hz, position) * ramp(position, segment.samples, kToneRamp);
+      case Kind::SWEEP:
+        return kTonePeak * sweep_(position) * ramp(position, segment.samples, kToneRamp);
       default:
         return 0.0f;
     }
@@ -403,6 +486,8 @@ class Generator {
   uint32_t pilot_position_{0};
   uint32_t pilot_ramp_{0};
   float phase_{0.0f};
+  float sweep_hz_{kSweepLowHz};
+  float sweep_step_{1.0f};
 };
 
 /// Reverberation time from block energies of a decay, noise floor removed:
@@ -481,7 +566,7 @@ class Engine {
   /// kBufferSamples of audio memory; it must outlive the engine.
   void set_buffer(int16_t *buffer) { buffer_ = buffer; }
 
-  enum class Mode : uint8_t { FULL, ATTENUATION };
+  enum class Mode : uint8_t { FULL, ATTENUATION, WARMUP };
 
   /// Starts a test. Without a buffer the engine fails at once.
   void start(Mode mode = Mode::FULL, uint32_t seed = 0x41495649) {
@@ -492,6 +577,7 @@ class Engine {
     buffer_ = buffer;
     mode_ = mode;
     results_.attenuation_only = mode == Mode::ATTENUATION;
+    results_.warmup = mode == Mode::WARMUP;
     seed_ = seed;
     generator_.reset(seed);
     for (size_t k = 0; k < kBands; k++) {
@@ -510,7 +596,9 @@ class Engine {
       bursts_[b].r = buffer_ + b * (kCorrN + kCorrL);
       bursts_[b].l = bursts_[b].r + kCorrN;
     }
-    action_ = mode == Mode::FULL ? Action::SETUP_A : Action::SETUP_ATTENUATION;
+    action_ = mode == Mode::FULL          ? Action::SETUP_A
+              : mode == Mode::ATTENUATION ? Action::SETUP_ATTENUATION
+                                          : Action::SETUP_WARMUP;
   }
 
   /// Stops a running test; the saved settings come back.
@@ -533,6 +621,8 @@ class Engine {
         return "noise_floor";
       case Step::PILOT:
         return "pilot";
+      case Step::WARMUP:
+        return "warmup";
       case Step::MEASURE_A:
         return "delay_and_tones";
       case Step::SETUP_B:
@@ -598,6 +688,7 @@ class Engine {
     switch (done) {
       case Action::SETUP_A:
       case Action::SETUP_ATTENUATION:
+      case Action::SETUP_WARMUP:
         reset_input_(ms_in(kSettleMs));
         set_step_(Step::FLOOR);
         break;
@@ -794,6 +885,9 @@ class Engine {
       case Step::PILOT:
         pilot_block_(active);
         break;
+      case Step::WARMUP:
+        warmup_block_(active);
+        break;
       case Step::MEASURE_A:
         measure_a_block_(active);
         break;
@@ -816,6 +910,11 @@ class Engine {
       floor_[k] /= floor_count_;
     floor_wide_ /= floor_count_;
     results_.floor_dbfs = ms_dbfs(floor_wide_);
+    if (mode_ == Mode::WARMUP) {
+      generator_.load({{Generator::Kind::SWEEP, 0, ms_out(kNoReferenceMs + kWarmupMaxOnsetMs + kWarmupAfterOnsetMs)}});
+      set_step_(Step::WARMUP);
+      return;
+    }
     if (mode_ == Mode::ATTENUATION) {
       // The reference channel carries the residual: the pilot's echo alone
       // tells that the speaker plays.
@@ -864,6 +963,114 @@ class Engine {
       if (step_frames_ - reference_frames_ > ms_in(kNoEchoMs))
         fail_(Error::NO_ECHO);
     }
+  }
+
+  void warmup_block_(bool active) {
+    Results &res = results_;
+    if (!reference_seen_) {
+      if (active) {
+        reference_seen_ = true;
+        reference_frames_ = step_frames_ - kBlock;  // the block's start
+        res.warmup_ref_ms = reference_frames_ * 1000.0f / kInRate;
+      } else if (step_frames_ > ms_in(kNoReferenceMs)) {
+        fail_(Error::NO_REFERENCE);
+      }
+      return;
+    }
+    // Middle of this block, ms after the reference onset.
+    const float t = (step_frames_ - kBlock / 2 - reference_frames_) * 1000.0f / kInRate;
+    if (fading_) {
+      if (quiet_blocks_ >= 5 || t - warmup_end_ms_ > kWarmupFadeTimeoutMs)
+        finish_warmup_();
+      return;
+    }
+    for (size_t k = 0; k < kBands; k++) {
+      const float x = t - sweep_pass_ms(k) - kWarmupEchoGuessMs + kSweepMs / 2.0f;
+      const size_t w = x >= 0.0f ? static_cast<size_t>(x / kSweepMs) : kWarmupWindows;
+      if (w < kWarmupWindows)
+        warmup_sum_[w][k] += static_cast<float>(block_l_[k]);
+    }
+    if (std::isnan(res.warmup_onset_ms)) {
+      bool heard = false;
+      for (size_t k = 0; k < kBands; k++)
+        heard |= block_l_[k] > floor_[k] * std::pow(10.0, kWarmupHeardDb / 10.0);
+      heard_blocks_ = heard ? heard_blocks_ + 1 : 0;
+      if (heard_blocks_ >= kWarmupHeardBlocks) {
+        res.warmup_onset_ms = (step_frames_ - kWarmupHeardBlocks * kBlock) * 1000.0f / kInRate;
+        onset_t_ms_ = t;
+      } else if (t > kWarmupMaxOnsetMs) {
+        fail_(Error::NO_ECHO);
+      }
+      return;
+    }
+    if (t - onset_t_ms_ >= kWarmupAfterOnsetMs) {
+      warmup_end_ms_ = t;
+      fading_ = true;
+      generator_.fade_out();
+    }
+  }
+
+  void finish_warmup_() {
+    Results &res = results_;
+    // Complete windows per band: those that ended before the fade.
+    size_t windows = kWarmupWindows;
+    for (size_t k = 0; k < kBands; k++) {
+      const float x = warmup_end_ms_ - sweep_pass_ms(k) - kWarmupEchoGuessMs + kSweepMs / 2.0f;
+      windows = std::min(windows, x > 0.0f ? static_cast<size_t>(x / kSweepMs) : size_t(0));
+    }
+    if (windows < kWarmupFinalWindows + 1) {
+      fail_(Error::TIMEOUT);
+      return;
+    }
+    res.warmup_windows = static_cast<uint8_t>(windows);
+    auto clamp_db = [](float db) {
+      return static_cast<int8_t>(std::lround(std::max(-99.0f, std::min(99.0f, db))));
+    };
+    std::array<double, kBands> final_level{};
+    double final_sum = 0.0;
+    bool any = false;
+    for (size_t k = 0; k < kBands; k++) {
+      BandResult &band = res.bands[k];
+      std::vector<float> last;
+      for (size_t w = windows - kWarmupFinalWindows; w < windows; w++)
+        last.push_back(static_cast<float>(warmup_sum_[w][k] / kSweepBlocks));
+      final_level[k] = median(last);
+      band.level_dbfs = ms_dbfs(final_level[k]);
+      band.snr_db = to_db(final_level[k] / std::max(floor_[k], 1e-9));
+      for (size_t w = 0; w < windows; w++)
+        res.warmup_band_db[k][w] =
+            clamp_db(to_db(warmup_sum_[w][k] / kSweepBlocks / std::max(final_level[k], 1e-9)));
+      if (band.snr_db < kWarmupMinSnrDb) {
+        res.warnings |= WARN_LOW_SNR;
+        continue;
+      }
+      final_sum += final_level[k];
+      const auto spread = std::minmax_element(last.begin(), last.end());
+      if (to_db(*spread.second / std::max(*spread.first, 1e-9f)) > kWarmupSettledDb)
+        res.warnings |= WARN_UNSETTLED;
+      // The first sweep from which on the band stays at its final level.
+      size_t ready = windows;
+      while (ready > 0 && std::fabs(to_db(warmup_sum_[ready - 1][k] / kSweepBlocks / final_level[k])) <= kWarmupReadyDb)
+        ready--;
+      band.ready_ms = res.warmup_window_ms(ready, k);
+      res.warmup_ready_ms = any ? std::max(res.warmup_ready_ms, band.ready_ms) : band.ready_ms;
+      any = true;
+    }
+    if (!any) {
+      fail_(Error::NO_ECHO);
+      return;
+    }
+    // Broadband over the timed bands, per sweep.
+    for (size_t w = 0; w < windows; w++) {
+      double sum = 0.0;
+      for (size_t k = 0; k < kBands; k++)
+        if (res.bands[k].snr_db >= kWarmupMinSnrDb)
+          sum += warmup_sum_[w][k] / kSweepBlocks;
+      res.warmup_ramp_db[w] = clamp_db(to_db(sum / final_sum));
+    }
+    res.warmup_settled = !(res.warnings & WARN_UNSETTLED);
+    set_step_(Step::RESTORE);
+    action_ = Action::RESTORE_MUX;
   }
 
   void measure_a_block_(bool active) {
@@ -1240,6 +1447,13 @@ class Engine {
   std::array<double, kBands> erle_r_{};
   std::array<double, kErleWindows> window_l_{};
   std::array<double, kErleWindows> window_r_{};
+
+  // Echo energy per sweep window and band, summed over 10 ms blocks.
+  std::array<std::array<float, kBands>, kWarmupWindows> warmup_sum_{};
+  uint32_t heard_blocks_{0};
+  float onset_t_ms_{0.0f};
+  bool fading_{false};
+  float warmup_end_ms_{0.0f};
 };
 
 }  // namespace aec_self_test

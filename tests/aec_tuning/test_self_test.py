@@ -236,3 +236,61 @@ def test_attenuation_test_without_echo(simulator) -> None:
     assert r["step"] == "failed" and r["error"] == "no_echo"
     assert r["restored"]
 
+
+
+# Warm-up test: times from the test's start, when Home Assistant is told to
+# switch the speaker. The simulator's echo arrives 880 samples (55 ms) after
+# the speaker plays; one sweep takes 250 ms.
+SWEEP_MS = 250
+ECHO_MS = 55
+
+
+def test_warmup_with_a_playing_speaker(simulator) -> None:
+    r = run(simulator, "--warmup", "--noise-dbfs", -70)
+    assert r["step"] == "done" and r["error"] == "none"
+    assert r["warmup"] and r["warmup_settled"]
+    # The first echo follows the reference by the echo delay.
+    assert r["warmup_onset_ms"] - r["warmup_ref_ms"] == pytest.approx(ECHO_MS, abs=30)
+    # Every band is at full level from its first pass.
+    for k, ready in enumerate(r["warmup_band_ready_ms"]):
+        first_pass = r["warmup_ref_ms"] + (k + 0.5) * SWEEP_MS / 6 + ECHO_MS
+        assert ready == pytest.approx(first_pass, abs=1)
+    assert r["warmup_ramp_db"][0] >= -2
+    # Nothing changed.
+    assert r["final_sys_delay"] == SYS_DELAY_BEFORE
+    assert r["final_ref_gain"] == pytest.approx(REF_GAIN_BEFORE)
+    assert not r["restored"]
+
+
+@pytest.mark.parametrize("switch_ms", [1500, 6000, 14000])
+def test_warmup_times_a_sleeping_amplifier(simulator, switch_ms) -> None:
+    r = run(simulator, "--warmup", "--switch-ms", switch_ms, "--noise-dbfs", -70)
+    assert r["step"] == "done"
+    assert r["warmup_onset_ms"] == pytest.approx(switch_ms + ECHO_MS, abs=30)
+    # Full level at the first pass after the switch, per band.
+    for ready in r["warmup_band_ready_ms"]:
+        assert switch_ms + ECHO_MS - 10 <= ready <= switch_ms + ECHO_MS + SWEEP_MS + 10
+    assert r["warmup_ready_ms"] == max(r["warmup_band_ready_ms"])
+    # Silent before the switch, full after it.
+    ramp = r["warmup_ramp_db"]
+    assert ramp[0] <= -30 and ramp[-1] == 0
+
+
+def test_warmup_times_a_fade_in(simulator) -> None:
+    # Plays from 3 s on, fading in from -30 dB over 2 s: within 1 dB after
+    # 1.93 s of the fade.
+    r = run(simulator, "--warmup", "--switch-ms", 3000, "--ramp-ms", 2000, "--noise-dbfs", -70)
+    assert r["step"] == "done"
+    full = 3000 + 2000 * (1 - 1 / 30) + ECHO_MS
+    assert full - 10 <= r["warmup_ready_ms"] <= full + SWEEP_MS + 10
+    assert 3000 + ECHO_MS - 10 <= r["warmup_onset_ms"] < full
+    ramp = r["warmup_ramp_db"]
+    # The ramp rises step by step through the fade.
+    assert len([db for db in ramp if -25 < db < -1]) >= 4
+
+
+def test_warmup_without_echo(simulator) -> None:
+    r = run(simulator, "--warmup", "--no-echo")
+    assert r["step"] == "failed" and r["error"] == "no_echo"
+    assert r["restored"]
+    assert r["final_sys_delay"] == SYS_DELAY_BEFORE
