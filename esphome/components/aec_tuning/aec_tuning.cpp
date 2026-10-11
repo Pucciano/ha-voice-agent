@@ -191,6 +191,11 @@ bool AecTuning::start_self_test(bool attenuation_only) {
   this->testing_ = true;
 
   this->speaker_->set_audio_stream_info(audio::AudioStreamInfo(16, 1, aec_self_test::kOutRate));
+  // Full volume in the codec for the test, whatever the media player is set
+  // to: the echo then has its worst case level and the most signal over the
+  // room noise. The media player keeps its volume, so Spotify sees nothing.
+  this->volume_before_ = this->speaker_->get_volume();
+  this->speaker_->set_volume(1.0f);
   this->speaker_->start();
   this->capturing_.store(true, std::memory_order_release);
   this->microphone_source_->start();
@@ -363,6 +368,7 @@ void AecTuning::finish_self_test_() {
   this->capturing_.store(false, std::memory_order_release);
   this->microphone_source_->stop();
   this->speaker_->stop();
+  this->speaker_->set_volume(this->volume_before_);
   this->testing_ = false;
 
   const aec_self_test::Results &res = this->engine_.results();

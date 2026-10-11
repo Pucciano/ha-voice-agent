@@ -285,7 +285,9 @@ The self test measures the echo path through the jack and sets the echo
 canceller (AEC). It plays about 45 seconds of noise bursts and tones from
 125 Hz to 4 kHz through the jack, and the XVF3800 records them: its output
 mux sends the microphone and the reference, later the AEC residual, to the
-ESP32 instead of the processed signal. Keep the room quiet and do not speak
+ESP32 instead of the processed signal. It plays at full satellite volume,
+whatever `Audioausgang` is set to, and restores the volume afterwards. Keep
+the room quiet and do not speak
 while it runs; the wake word is paused, and the ring shows a circling white
 light.
 

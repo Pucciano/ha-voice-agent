@@ -115,6 +115,7 @@ class AecTuning final : public Component
 
   aec_self_test::Engine engine_;
   bool testing_{false};
+  float volume_before_{1.0f};  // codec volume before the test
   uint32_t test_started_ms_{0};
   aec_self_test::Step reported_step_{aec_self_test::Step::IDLE};
   int16_t *engine_buffer_{nullptr};
