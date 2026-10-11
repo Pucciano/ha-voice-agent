@@ -1160,6 +1160,12 @@ class Engine {
     // An adapted canceller never leaves more than the microphone had; while
     // it adapts it can, so only the last window counts.
     const size_t last = kErleWindows - 1;
+    // Without the noise's echo both channels carry only room noise.
+    const double blocks = kErleWindowEnd[last] - kErleWindowStart[last];
+    if (window_l_[last] / blocks < floor_wide_ * std::pow(10.0, kOnsetBDb / 10.0)) {
+      fail_(Error::NO_ECHO);
+      return;
+    }
     if (window_r_[last] > 2.0 * window_l_[last]) {
       fail_(Error::INVALID_MUX);
       return;
