@@ -63,7 +63,9 @@ def tool_call(arguments: str, name: str = "HassTurnOn") -> dict[str, Any]:
 class FakeUpstream:
     """Records every request and answers from a list, the last one repeating."""
 
-    def __init__(self, *answers: httpx.Response | Callable[[], Any]) -> None:
+    def __init__(
+        self, *answers: httpx.Response | Callable[[httpx.Request], Any]
+    ) -> None:
         self.answers = list(answers) or [httpx.Response(200, json=completion())]
         self.requests: list[httpx.Request] = []
 
@@ -71,7 +73,7 @@ class FakeUpstream:
         self.requests.append(request)
         answer = self.answers[min(len(self.requests), len(self.answers)) - 1]
         if callable(answer):
-            return answer()
+            return answer(request)
         return answer
 
     def bodies(self) -> list[dict[str, Any]]:

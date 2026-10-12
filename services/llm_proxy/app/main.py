@@ -27,9 +27,15 @@ import app.upstream as upstream
 
 LOGGER = logging.getLogger("llm_proxy")
 
-# The OpenAI client libraries retry 401 and 429 answers unless told not to.
-# A retry cannot change the proxy's own refusals.
+# The OpenAI client libraries retry 401, 429 and 5xx answers unless told
+# not to. A retry cannot change the proxy's own refusals, and when the
+# upstream is unreachable a voice user is better served by a quick error than
+# by two more attempts with back-off.
 _NO_RETRY = {"x-should-retry": "false"}
+# Seconds to reach the upstream; an unreachable provider fails within this.
+# Clients such as Home Assistant speak the error's `message`, so it holds
+# LLM_PROXY_UNAVAILABLE_MESSAGE and the technical cause goes to `detail`.
+_CONNECT_TIMEOUT = 10.0
 
 
 def _configure_logging(level: str) -> None:
@@ -140,7 +146,7 @@ def create_app(
                 LOGGER.error("cannot create capture directories: %s", exc)
         timeout = httpx.Timeout(
             timeout=settings.upstream_timeout_seconds,
-            connect=min(30.0, settings.upstream_timeout_seconds),
+            connect=min(_CONNECT_TIMEOUT, settings.upstream_timeout_seconds),
         )
         application.state.http_client = httpx.AsyncClient(
             timeout=timeout, transport=transport
@@ -243,7 +249,9 @@ def create_app(
 
     async def post_chat_completion(
         payload: dict,
-    ) -> tuple[int, dict[str, typing.Any]]:
+    ) -> tuple[int, bool, dict[str, typing.Any]]:
+        """Status, whether the upstream was unreachable, and the body."""
+
         try:
             response = await http_client().post(
                 chat_url,
@@ -252,22 +260,24 @@ def create_app(
             )
         except httpx.TimeoutException as exc:
             LOGGER.warning("upstream timeout: %s", exc)
-            return 504, {
+            return 504, True, {
                 "error": {
-                    "message": (
+                    "message": settings.unavailable_message,
+                    "type": "upstream_timeout",
+                    "detail": (
                         "Upstream request timed out in llm_proxy. Increase "
                         "LLM_PROXY_UPSTREAM_TIMEOUT_SECONDS if needed."
                     ),
-                    "type": "upstream_timeout",
                     "upstream_url": chat_url,
                 }
             }
         except httpx.HTTPError as exc:
             LOGGER.error("upstream request failed: %s", exc)
-            return 502, {
+            return 502, True, {
                 "error": {
-                    "message": f"Upstream request failed in llm_proxy. {exc}",
+                    "message": settings.unavailable_message,
                     "type": "upstream_http_error",
+                    "detail": f"Upstream request failed in llm_proxy. {exc}",
                     "upstream_url": chat_url,
                 }
             }
@@ -281,7 +291,7 @@ def create_app(
                 response.status_code,
                 str(message or error)[:300],
             )
-        return response.status_code, body
+        return response.status_code, False, body
 
     async def capture_if_enabled(record: dict[str, typing.Any]) -> None:
         if not settings.capture_enabled:
@@ -350,7 +360,9 @@ def create_app(
         final_payload = payload
         retries_used = 0
 
-        final_status, final_response_json = await post_chat_completion(payload)
+        final_status, unreachable, final_response_json = (
+            await post_chat_completion(payload)
+        )
         invalid_tool_calls = tool_calls.validate_tool_call_arguments(
             final_response_json
         )
@@ -362,8 +374,8 @@ def create_app(
                 invalid_response=final_response_json,
                 problems=invalid_tool_calls,
             )
-            final_status, final_response_json = await post_chat_completion(
-                final_payload
+            final_status, unreachable, final_response_json = (
+                await post_chat_completion(final_payload)
             )
 
         latency_ms = round((time.perf_counter() - started_at) * 1000.0, 3)
@@ -399,6 +411,7 @@ def create_app(
         return fastapi.responses.JSONResponse(
             status_code=final_status,
             content=final_response_json,
+            headers=_NO_RETRY if unreachable else None,
         )
 
     return api

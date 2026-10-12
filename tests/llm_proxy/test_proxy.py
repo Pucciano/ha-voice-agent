@@ -166,16 +166,48 @@ def test_upstream_errors_keep_their_status():
 
 
 def test_unreachable_upstream_is_a_bad_gateway():
-    def refuse():
-        raise httpx.ConnectError("connection refused")
+    def refuse(request):
+        raise httpx.ConnectError("connection refused", request=request)
 
-    with proxy(upstream=FakeUpstream(refuse)) as (client, _):
+    with proxy(
+        upstream=FakeUpstream(refuse),
+        LLM_PROXY_UNAVAILABLE_MESSAGE="Das Sprachmodell ist nicht erreichbar.",
+    ) as (client, _):
         response = client.post(
             "/v1/chat/completions", json=chat_request(), headers=auth()
         )
 
     assert response.status_code == 502
-    assert response.json()["error"]["type"] == "upstream_http_error"
+    error = response.json()["error"]
+    assert error["type"] == "upstream_http_error"
+    assert error["message"] == "Das Sprachmodell ist nicht erreichbar."
+    assert "connection refused" in error["detail"]
+    assert response.headers["x-should-retry"] == "false"
+
+
+def test_upstream_timeout_is_a_gateway_timeout_without_retry():
+    def hang(request):
+        raise httpx.ConnectTimeout("no route", request=request)
+
+    with proxy(upstream=FakeUpstream(hang)) as (client, _):
+        response = client.post(
+            "/v1/chat/completions", json=chat_request(), headers=auth()
+        )
+
+    assert response.status_code == 504
+    assert response.headers["x-should-retry"] == "false"
+
+
+def test_upstream_answers_may_be_retried_by_the_client():
+    error = {"message": "overloaded", "type": "service_unavailable"}
+    fake = FakeUpstream(httpx.Response(503, json={"error": error}))
+    with proxy(upstream=fake) as (client, _):
+        response = client.post(
+            "/v1/chat/completions", json=chat_request(), headers=auth()
+        )
+
+    assert response.status_code == 503
+    assert "x-should-retry" not in response.headers
 
 
 def test_health_asks_the_upstream_only_on_request():

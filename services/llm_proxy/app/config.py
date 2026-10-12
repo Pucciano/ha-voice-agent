@@ -30,6 +30,7 @@ class Settings:
     log_dir: pathlib.Path
     max_repair_retries: int
     upstream_timeout_seconds: float
+    unavailable_message: str
 
     @property
     def alias_mode(self) -> bool:
@@ -121,4 +122,8 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
             env.get("LLM_PROXY_MAX_REPAIR_RETRIES"), default=1, minimum=0
         ),
         upstream_timeout_seconds=upstream_timeout_seconds,
+        unavailable_message=env.get(
+            "LLM_PROXY_UNAVAILABLE_MESSAGE",
+            "The language model is not reachable.",
+        ),
     )
