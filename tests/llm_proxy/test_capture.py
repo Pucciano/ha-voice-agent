@@ -4,9 +4,11 @@ import json
 
 from helpers import (
     CLIENT_KEY,
+    LOCAL_CALL_ID,
     UPSTREAM_KEY,
     auth,
     chat_request,
+    local_intent_follow_up,
     proxy,
 )
 
@@ -81,3 +83,41 @@ def test_capture_without_marker_setting_creates_its_directory(tmp_path):
         _ask(client)
 
     assert len(list(target.glob("llm_capture_*.jsonl"))) == 1
+
+
+def test_capture_keeps_the_raw_request_and_lists_the_fixed_names(tmp_path):
+    drive, env = _capture_env(tmp_path)
+    (drive / ".aivi-capture-volume").touch()
+    (drive / "aivi-llm").mkdir()
+    with proxy(**env) as (client, _):
+        response = client.post(
+            "/v1/chat/completions",
+            json=local_intent_follow_up(),
+            headers=auth(),
+        )
+    assert response.status_code == 200
+
+    (capture_file,) = (drive / "aivi-llm").glob("llm_capture_*.jsonl")
+    record = json.loads(capture_file.read_text(encoding="utf-8"))
+    local_call = record["request"]["messages"][6]["tool_calls"][0]
+    assert local_call["function"]["name"] == "HassStartTimer"
+    assert record["fixed_tool_names"] == [
+        {
+            "source": "history",
+            "tool_call_id": LOCAL_CALL_ID,
+            "from": "HassStartTimer",
+            "to": "intent__HassStartTimer",
+        }
+    ]
+
+
+def test_capture_lists_no_fixed_names_for_a_clean_request(tmp_path):
+    drive, env = _capture_env(tmp_path)
+    (drive / ".aivi-capture-volume").touch()
+    (drive / "aivi-llm").mkdir()
+    with proxy(**env) as (client, _):
+        _ask(client)
+
+    (capture_file,) = (drive / "aivi-llm").glob("llm_capture_*.jsonl")
+    record = json.loads(capture_file.read_text(encoding="utf-8"))
+    assert record["fixed_tool_names"] == []

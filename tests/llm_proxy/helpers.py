@@ -1,6 +1,7 @@
 """Fake upstream and app factory for the llm_proxy tests."""
 
 import contextlib
+import copy
 import json
 import pathlib
 import sys
@@ -113,4 +114,108 @@ def chat_request(**extra: Any) -> dict[str, Any]:
         "top_p": 1.0,
         "user": "01JCONVERSATION",
         **extra,
+    }
+
+
+def assist_tool(tool: str, /, **properties: dict) -> dict[str, Any]:
+    """A tool as Home Assistant's Assist API declares it, shortened."""
+
+    return {
+        "type": "function",
+        "function": {
+            "name": tool,
+            "description": f"Assist tool {tool}",
+            "parameters": {"type": "object", "properties": properties},
+        },
+    }
+
+
+# Tools of a satellite that supports timers, with Home Assistant's prefixes.
+ASSIST_TOOLS = [
+    assist_tool(
+        "intent__HassStartTimer",
+        hours={"type": "integer"},
+        minutes={"type": "integer"},
+        seconds={"type": "integer"},
+        name={"type": "string"},
+    ),
+    assist_tool("intent__HassCancelTimer", name={"type": "string"}),
+    assist_tool("intent__HassTimerStatus", name={"type": "string"}),
+    assist_tool("intent__HassTurnOn", name={"type": "string"}),
+    assist_tool("media_player__HassMediaPause", name={"type": "string"}),
+    assist_tool("llm__GetDateTime"),
+]
+
+# Id of the tool call that Home Assistant logs for a locally handled turn
+# (a ULID), and of a call the model made itself (nine characters).
+LOCAL_CALL_ID = "01K7FZ3QH8M2V6T9R4N1PXJWDC"
+MODEL_CALL_ID = "Xk3mQ9pLa"
+
+
+def local_intent_follow_up() -> dict[str, Any]:
+    """The request after a timer that the built-in agent started locally.
+
+    Modelled on the requests of 2026-10-12 (issue #19): the earlier turns
+    sit in the history, the local one under the raw intent name
+    `HassStartTimer` while the tools carry the prefixed names.
+    """
+
+    return {
+        "model": "aivi",
+        "messages": [
+            {"role": "system", "content": "Du bist ein Sprachassistent."},
+            {"role": "user", "content": "Wie spät ist es?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": MODEL_CALL_ID,
+                        "type": "function",
+                        "function": {
+                            "name": "llm__GetDateTime",
+                            "arguments": "{}",
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": MODEL_CALL_ID,
+                "content": '{"date": "2026-10-12", "time": "22:03:40"}',
+            },
+            {"role": "assistant", "content": "Es ist 22:03 Uhr."},
+            {"role": "user", "content": "Stelle einen Timer auf 10 Sekunden"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": LOCAL_CALL_ID,
+                        "type": "function",
+                        "function": {
+                            "name": "HassStartTimer",
+                            "arguments": '{"seconds": 10}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": LOCAL_CALL_ID,
+                "content": (
+                    '{"speech": {"plain": {"speech": "Timer gestartet"}}, '
+                    '"response_type": "action_done", '
+                    '"data": {"targets": [], "success": [], "failed": []}}'
+                ),
+            },
+            {"role": "assistant", "content": "Timer gestartet"},
+            {"role": "user", "content": "Stelle einen 10-Sekunden-Timer."},
+        ],
+        "tools": copy.deepcopy(ASSIST_TOOLS),
+        "tool_choice": "auto",
+        "max_tokens": 3000,
+        "temperature": 0.3,
+        "top_p": 1.0,
+        "user": "01K7FZ0CONVERSATION0000000",
     }

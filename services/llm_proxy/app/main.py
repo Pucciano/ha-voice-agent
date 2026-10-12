@@ -1,4 +1,4 @@
-"""OpenAI-compatible LLM proxy service with tool-call JSON repair.
+"""OpenAI-compatible LLM proxy service with tool-call repair.
 
 The upstream is any OpenAI-compatible server: vLLM in compose/dev, a cloud
 provider on the Jetson (docs/jetson_setup.md, section 11). Clients see one
@@ -23,6 +23,7 @@ import app.capture as capture
 import app.config as config
 import app.limits as limits
 import app.tool_calls as tool_calls
+import app.tool_names as tool_names
 import app.upstream as upstream
 
 LOGGER = logging.getLogger("llm_proxy")
@@ -164,7 +165,7 @@ def create_app(
 
     api = fastapi.FastAPI(
         title="ha-voice-agent llm_proxy",
-        version="0.2.0",
+        version="0.2.1",
         lifespan=lifespan,
     )
 
@@ -315,7 +316,7 @@ def create_app(
     async def chat_completions(
         request: fastapi.Request,
     ) -> fastapi.responses.JSONResponse:
-        """Proxy chat completions with one-shot tool-call JSON repair."""
+        """Proxy chat completions with tool-name and one-shot JSON repair."""
 
         denied = _unauthorized(request, settings)
         if denied is not None:
@@ -357,11 +358,14 @@ def create_app(
                 headers=_NO_RETRY,
             )
 
-        final_payload = payload
+        final_payload, fixed_tool_names = tool_names.qualify_history(payload)
         retries_used = 0
 
         final_status, unreachable, final_response_json = (
-            await post_chat_completion(payload)
+            await post_chat_completion(final_payload)
+        )
+        fixed_tool_names += tool_names.qualify_response(
+            final_response_json, payload.get("tools")
         )
         invalid_tool_calls = tool_calls.validate_tool_call_arguments(
             final_response_json
@@ -370,12 +374,15 @@ def create_app(
         if invalid_tool_calls and settings.max_repair_retries > 0:
             retries_used = 1
             final_payload = tool_calls.build_repair_request(
-                original_request=payload,
+                original_request=final_payload,
                 invalid_response=final_response_json,
                 problems=invalid_tool_calls,
             )
             final_status, unreachable, final_response_json = (
                 await post_chat_completion(final_payload)
+            )
+            fixed_tool_names += tool_names.qualify_response(
+                final_response_json, payload.get("tools")
             )
 
         latency_ms = round((time.perf_counter() - started_at) * 1000.0, 3)
@@ -395,6 +402,7 @@ def create_app(
             "response_status": final_status,
             "invalid_tool_calls": invalid_tool_calls,
             "repair_retry_used": retries_used,
+            "fixed_tool_names": fixed_tool_names,
             "host": os.getenv("HOSTNAME", "unknown"),
             "usage": final_response_json.get("usage"),
         }
@@ -407,6 +415,15 @@ def create_app(
             _count_tool_calls(final_response_json),
             retries_used,
         )
+        if fixed_tool_names:
+            LOGGER.info(
+                "chat %s: prefixed tool names %s",
+                request_id[:8],
+                ", ".join(
+                    f"{fix['source']} {fix['from']} -> {fix['to']}"
+                    for fix in fixed_tool_names
+                ),
+            )
 
         return fastapi.responses.JSONResponse(
             status_code=final_status,
