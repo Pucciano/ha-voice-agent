@@ -616,6 +616,14 @@ every request to the cloud model and keeps the provider's key on the Jetson
 - Streaming is refused. Home Assistant notices that when the integration is
   added and then asks without streaming.
 - Malformed tool arguments get one repair request.
+- A tool call under a raw intent name such as `HassStartTimer` gets its
+  prefix back (`intent__HassStartTimer`) when exactly one of the request's
+  tools carries that name, in the history before the request goes out and in
+  the model's answer. Home Assistant logs a command that its built-in agent
+  handled locally under the raw name; the model copied it in the next turn
+  of the conversation, and Home Assistant answered "Tool not found". The
+  capture keeps the request as Home Assistant sent it and lists each rename
+  in `fixed_tool_names`.
 - An unreachable provider fails at once: at most 10 s to connect, and the
   answer tells the client not to retry. Its message,
   `LLM_PROXY_UNAVAILABLE_MESSAGE` ("Das Sprachmodell ist gerade nicht
@@ -656,7 +664,7 @@ scp -r compose/jetson/docker-compose.yml scripts/jetson_capture.sh services/stt_
 ```
 
 ```bash
-ssh aivi@<jetson-ip> 'cd /tmp/aivi-update && docker build -t aivi/stt-capture:0.1.1 stt_capture && docker build -t aivi/stt-bridge:0.1.0 stt_bridge && docker build -t aivi/llm-proxy:0.2.0 llm_proxy'
+ssh aivi@<jetson-ip> 'cd /tmp/aivi-update && docker build -t aivi/stt-capture:0.1.1 stt_capture && docker build -t aivi/stt-bridge:0.1.0 stt_bridge && docker build -t aivi/llm-proxy:0.2.1 llm_proxy'
 ```
 
 Update `aivi-capture`, which creates `aivi-llm/` on the drive, and install
