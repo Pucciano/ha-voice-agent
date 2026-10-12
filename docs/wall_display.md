@@ -45,7 +45,7 @@ sections. In between:
 
 | Section | Content |
 |---|---|
-| Licht · Schlafzimmer | Ceiling light and bed (the WLED master, which switches every segment); "Alle N aus" as in the living room. The wardrobe lights have no tile: they stay on and follow their own sensors |
+| Licht · Schlafzimmer | Ceiling light and bed (a WLED strip with one segment); "Alle N aus" as in the living room. The wardrobe lights have no tile: they stay on and follow their own sensors |
 | Lichtszenen | Love, Day, Night, Ocean, Sunset and Reading in two rows of three; a tap activates the scene, a long press opens its details |
 
 The climate section lists the bedroom first. `main` holds the header,
@@ -111,11 +111,11 @@ profile to "Schlafzimmer".
   names or room entities.
 - Label `light_count_exclude` on lights that are part of a lamp or group that
   is already counted: the eight pendant bulbs, the corridor spots 1, 2, 4 and
-  5, the two office lamp bulbs and the WLED master of the bed light. Without
-  it the summary counts bulbs instead of lamps. Give new group members this
-  label too. The label also keeps lights that stay on out of the count and
-  out of "Alle N aus": the two IKEA PAX wardrobe lights in the bedroom,
-  which follow their own sensors.
+  5 and the two office lamp bulbs. Without it the summary counts bulbs
+  instead of lamps. Give new group members this label too. The label also
+  keeps lights that stay on out of the count and out of "Alle N aus": the
+  two IKEA PAX wardrobe lights in the bedroom, which follow their own
+  sensors.
 - Template helper "Active media player" (Settings → Devices & services →
   Helpers → Template → Sensor). Its state template is
   `config/homeassistant/helpers/active_media_player.jinja`. The entity is
