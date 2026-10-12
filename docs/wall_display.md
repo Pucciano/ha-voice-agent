@@ -113,7 +113,9 @@ profile to "Schlafzimmer".
   is already counted: the eight pendant bulbs, the corridor spots 1, 2, 4 and
   5, the two office lamp bulbs and the WLED master of the bed light. Without
   it the summary counts bulbs instead of lamps. Give new group members this
-  label too.
+  label too. The label also keeps lights that stay on out of the count and
+  out of "Alle N aus": the two IKEA PAX wardrobe lights in the bedroom,
+  which follow their own sensors.
 - Template helper "Active media player" (Settings → Devices & services →
   Helpers → Template → Sensor). Its state template is
   `config/homeassistant/helpers/active_media_player.jinja`. The entity is
