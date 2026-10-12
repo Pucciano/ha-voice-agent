@@ -56,21 +56,13 @@ views:
                             name: Decke
                             icon: mdi:ceiling-light
                           # The WLED master switches every segment of the bed.
+                          # The wardrobe lights have no tile: they stay on and
+                          # follow their own sensors.
                           - type: custom:button-card
                             template: wd_light_tile
                             entity: light.bedroom_bed_wled
                             name: Bett
                             icon: mdi:bed
-                          - type: custom:button-card
-                            template: wd_light_tile
-                            entity: light.bedroom_wardrobe_light_left
-                            name: Schrank links
-                            icon: mdi:wardrobe-outline
-                          - type: custom:button-card
-                            template: wd_light_tile
-                            entity: light.bedroom_wardrobe_light_right
-                            name: Schrank rechts
-                            icon: mdi:wardrobe-outline
                 # The scenes are still being set up; a tile without its
                 # entity shows "Nicht angelegt".
                 - type: custom:button-card
@@ -110,6 +102,11 @@ views:
                             entity: scene.bedroom_sunset
                             name: Sunset
                             icon: mdi:weather-sunset
+                          - type: custom:button-card
+                            template: wd_scene_tile
+                            entity: scene.bedroom_reading
+                            name: Reading
+                            icon: mdi:book-open-variant
           side:
             card:
               type: vertical-stack

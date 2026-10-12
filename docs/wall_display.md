@@ -45,8 +45,8 @@ sections. In between:
 
 | Section | Content |
 |---|---|
-| Licht · Schlafzimmer | Ceiling light, bed (the WLED master, which switches every segment) and the left and right wardrobe lights; "Alle N aus" as in the living room |
-| Lichtszenen | Love, Day, Night, Ocean and Sunset; a tap activates the scene, a long press opens its details |
+| Licht · Schlafzimmer | Ceiling light and bed (the WLED master, which switches every segment); "Alle N aus" as in the living room. The wardrobe lights have no tile: they stay on and follow their own sensors |
+| Lichtszenen | Love, Day, Night, Ocean, Sunset and Reading in two rows of three; a tap activates the scene, a long press opens its details |
 
 The climate section lists the bedroom first. `main` holds the header,
 weather, lights and scenes; `side` holds music, climate and appliances.
@@ -127,8 +127,8 @@ profile to "Schlafzimmer".
   during a programme, so the Geräte section and the appliance tiles follow
   these flags instead of the plug power.
 - Scenes `scene.bedroom_love`, `scene.bedroom_day`, `scene.bedroom_night`,
-  `scene.bedroom_ocean` and `scene.bedroom_sunset` for the bedroom scene
-  tiles. A tile without its entity shows "Nicht angelegt" and does nothing.
+  `scene.bedroom_ocean`, `scene.bedroom_sunset` and `scene.bedroom_reading`
+  for the bedroom scene tiles. A tile without its entity shows "Nicht angelegt" and does nothing.
   A tile also takes a script; it then runs `script.turn_on`.
 - `sensor.time` from the Time & Date integration drives the clock.
 - Weather from the Deutscher Wetterdienst, see Weather sources.
