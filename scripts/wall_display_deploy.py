@@ -30,6 +30,7 @@ SHARED_FILE = DASHBOARD_DIR / "wall_display_templates.yaml"
 # Dashboard url_path in Home Assistant -> room file.
 DASHBOARDS = {
     "dashboard-living-room-wall-display": "living_room_wall_display.yaml",
+    "dashboard-bedroom-wall-display": "bedroom_wall_display.yaml",
 }
 TEMPLATES = "button_card_templates"
 # Keys of a room file, in the order of the merged configuration.

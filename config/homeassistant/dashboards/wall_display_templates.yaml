@@ -1321,3 +1321,65 @@ button_card_templates:
         - font-size: 12px
         - line-height: 16px
         - color: "[[[ return variables.mode === 'running' ? '#5B4D44' : 'var(--wd-muted)'; ]]]"
+
+  # ---------------------------------------------------------------- scenes --
+  # A light scene or script, in the shape of a light tile. Before the entity
+  # exists the tile shows "Nicht angelegt" and does nothing.
+  wd_scene_tile:
+    template:
+      - wd_base
+      - wd_helpers
+    show_name: true
+    show_icon: true
+    show_state: true
+    tap_action: |
+      [[[
+        if (!entity) return { action: 'none' };
+        return { action: 'perform-action', perform_action: `${entity.entity_id.split('.')[0]}.turn_on`,
+          target: { entity_id: entity.entity_id } };
+      ]]]
+    hold_action: "[[[ return entity ? { action: 'more-info' } : { action: 'none' }; ]]]"
+    # A scene's state is the time it was last activated.
+    state_display: |
+      [[[
+        if (!entity) return 'Nicht angelegt';
+        if (entity.state === 'unavailable') return 'Nicht erreichbar';
+        if (entity.state === 'on') return 'Läuft';
+        const last = entity.entity_id.startsWith('script.') ? entity.attributes.last_triggered : entity.state;
+        return last && !isNaN(new Date(last)) ? `Zuletzt ${variables.since(last)}` : 'Bereit';
+      ]]]
+    styles:
+      card:
+        - height: 96px
+        - padding: 12px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - background: var(--wd-tile-off)
+        - border: 1px solid var(--wd-line)
+        - cursor: "[[[ return entity ? 'pointer' : 'default'; ]]]"
+        - opacity: "[[[ return entity ? 1 : 0.5; ]]]"
+      grid:
+        - grid-template-areas: '"i" "n" "s"'
+        - grid-template-columns: minmax(0, 1fr)
+        - grid-template-rows: 34px 1fr min-content
+        - justify-items: start
+      img_cell:
+        - width: 34px
+        - height: 34px
+        - border-radius: 17px
+        - justify-self: start
+        - background: var(--wd-accent-bg)
+      icon:
+        - width: 18px
+        - color: var(--wd-ink)
+      name:
+        - justify-self: start
+        - align-self: end
+        - font-size: 14px
+        - line-height: 18px
+        - font-weight: 700
+      state:
+        - justify-self: start
+        - font-size: 12px
+        - line-height: 16px
+        - color: var(--wd-muted)
