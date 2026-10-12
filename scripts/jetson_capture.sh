@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# USB drive for the speech-to-text request capture and the wake word
-# recordings on the Jetson (docs/jetson_setup.md, sections 9 and 10).
+# USB drive for the speech-to-text request capture, the wake word
+# recordings and the LLM exchanges on the Jetson (docs/jetson_setup.md,
+# sections 9 to 11).
 # Installed as /usr/local/sbin/aivi-capture.
 #
 #   format <device>  partition and format a USB drive as ext4 (ERASES IT)
@@ -11,10 +12,12 @@ set -euo pipefail
 #   mount            mount the drive again after an eject, and create
 #                    missing data directories
 #   eject            unmount, so the drive can be unplugged
-#   status           show mount, marker, free space, samples and takes
+#   status           show mount, marker, free space, samples, takes and
+#                    LLM capture files
 #
 # Layout: /mnt/aivi-capture is a plain directory on the SD card and is bind
-# mounted into the stt-capture and wake-word-recorder containers. The drive is mounted below it at
+# mounted into the stt-capture, wake-word-recorder and llm-proxy containers.
+# The drive is mounted below it at
 # /mnt/aivi-capture/drive, so mounts and unmounts reach the running container.
 # Without the drive, drive/ is an empty, immutable directory on the SD card
 # without the marker file, and the containers write nothing.
@@ -28,6 +31,7 @@ MOUNT_POINT=${PARENT}/drive
 MARKER=.aivi-capture-volume
 SAMPLES_DIR=aivi-stt
 TAKES_DIR=aivi-wake-word
+LLM_DIR=aivi-llm
 # The container runs as uid 1000 (aivi).
 OWNER=1000:1000
 MOUNT_OPTIONS=nofail,noatime,nodev,nosuid,noexec,x-systemd.device-timeout=10s
@@ -157,14 +161,14 @@ EOF
   udevadm control --reload-rules
 }
 
-# The data directories of both services, owned by the container user. Only
+# The data directories of the services, owned by the container user. Only
 # on the mounted drive with its marker, never on the SD card.
 make_data_dirs() {
   mountpoint -q "${MOUNT_POINT}" || die "The drive is not mounted."
   [[ -f ${MOUNT_POINT}/${MARKER} ]] ||
     die "The drive has no marker file. Run: sudo aivi-capture setup"
   local dir
-  for dir in "${SAMPLES_DIR}" "${TAKES_DIR}"; do
+  for dir in "${SAMPLES_DIR}" "${TAKES_DIR}" "${LLM_DIR}"; do
     install -d -o "${OWNER%:*}" -g "${OWNER#*:}" -m 0755 \
       "${MOUNT_POINT}/${dir}"
   done
@@ -263,6 +267,14 @@ cmd_status() {
     echo "newest take: ${newest:-none}"
   else
     echo "takes:       no ${TAKES_DIR}/ directory (run: sudo aivi-capture mount)"
+  fi
+  if [[ -d ${MOUNT_POINT}/${LLM_DIR} ]]; then
+    local days records
+    days=$(find "${MOUNT_POINT}/${LLM_DIR}" -name 'llm_capture_*.jsonl' | wc -l || true)
+    records=$(cat "${MOUNT_POINT}/${LLM_DIR}"/llm_capture_*.jsonl 2>/dev/null | wc -l || true)
+    echo "llm:         ${records} exchanges in ${days} daily files"
+  else
+    echo "llm:         no ${LLM_DIR}/ directory (run: sudo aivi-capture mount)"
   fi
 }
 
