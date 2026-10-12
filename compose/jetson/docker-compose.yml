@@ -156,6 +156,8 @@ services:
       LLM_PROXY_REQUIRE_API_KEY: "true"
       LLM_PROXY_DAILY_REQUEST_LIMIT: ${LLM_PROXY_DAILY_REQUEST_LIMIT:-500}
       LLM_PROXY_UPSTREAM_TIMEOUT_SECONDS: "30"
+      # Home Assistant speaks this when the provider cannot be reached.
+      LLM_PROXY_UNAVAILABLE_MESSAGE: Das Sprachmodell ist gerade nicht erreichbar.
       LLM_PROXY_ENABLE_CAPTURE: ${LLM_PROXY_ENABLE_CAPTURE:-true}
       LLM_PROXY_CAPTURE_DIR: /capture/drive/aivi-llm
       LLM_PROXY_CAPTURE_MARKER: /capture/drive/.aivi-capture-volume
