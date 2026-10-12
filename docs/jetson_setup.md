@@ -3,11 +3,16 @@
 This runbook turns a classic Jetson Nano Developer Kit (4 GB, microSD) into
 the speech server of plan phase 4. It runs two Wyoming services for Home
 Assistant, plus a relay that can store requests for training and a recorder
-for wake word training takes:
+for wake word training takes. It is also the gateway of the LLM assistant
+([LLM assistant](llm_assistant.md)): a proxy to the language model and a
+bridge to a cloud speech recogniser:
 
 | Service | Purpose | Port |
 |---|---|---:|
 | stt-capture | relays speech to text to Speech-to-Phrase; stores requests on a USB drive while a satellite allows it ([section 9](#9-request-capture)) | 10300 |
+| stt-capture-cloud | the same relay in front of stt-bridge, for the LLM pipeline ([section 12](#12-cloud-speech-to-text)) | 10310 |
+| stt-bridge | speech to text through a cloud transcription API ([section 12](#12-cloud-speech-to-text)) | internal |
+| llm-proxy | OpenAI-compatible endpoint for Home Assistant, forwards to the cloud model ([section 11](#11-llm-proxy)) | 18001 |
 | wake-word-recorder | stores the wake word training takes that satellites stream when started in Home Assistant ([section 10](#10-wake-word-recording)) | 10800 |
 | Speech-to-Phrase | speech to text | internal |
 | Piper (`de_DE-thorsten-medium`) | text to speech | 10200 |
@@ -29,6 +34,19 @@ Speech-to-Phrase is Home Assistant's closed-vocabulary recogniser. It trains on
 the names of the entities, areas and floors exposed to Assist. It supports
 German and answered test commands in about 1.3 s. It only recognises commands
 that Assist knows: no shopping lists, timer names or free text.
+
+Free speech for the LLM assistant needs an open recogniser. Whisper on the
+Nano's CPU was measured on 2026-10-11 with 17 captured real commands
+(wyoming-whisper 3.8.1, time from the end of speech to the transcript):
+
+| Model | Typical | Outliers | Text |
+|---|---:|---:|---|
+| `base-int8` | 5.1–6.4 s | 22–57 s | frequent nonsense ("Blischpethystas") |
+| `small-int8` | 13–14 s | 41–50 s | mostly right |
+
+That is too slow for a voice assistant, so the LLM pipeline transcribes in the
+cloud ([section 12](#12-cloud-speech-to-text)) and Speech-to-Phrase stays the
+offline path.
 
 ## 1. Flash the microSD card (macOS)
 
@@ -276,13 +294,15 @@ Each request becomes one directory on the drive, in the layout of
 ```text
 /mnt/aivi-capture/drive/aivi-stt/20261003T194312Z-living_room-1a2b3c/
   audio.wav        16 kHz, 16 bit, mono, as Home Assistant sent it
-  transcript.txt   the text of Speech-to-Phrase (a pseudo label)
+  transcript.txt   the recogniser's text (a pseudo label)
   metadata.json    satellite, outcome, format, levels, SHA-256, model, latency
 ```
 
-Speech-to-Phrase picks from known sentences, so its text is not ground truth.
-Samples start as `verified: false`, and `prepare_dataset.py` leaves them out
-until they are reviewed.
+`label_source` names the recogniser behind the relay: `speech-to-phrase` on
+port 10300, `stt-bridge` on port 10310. Speech-to-Phrase picks from known
+sentences, and the cloud model can mishear too, so neither text is ground
+truth. Samples start as `verified: false`, and `prepare_dataset.py` leaves
+them out until they are reviewed.
 
 While the switch is on, everything said after the wake word is stored
 unencrypted on the drive. Tell the household, and switch it off when the
@@ -340,7 +360,7 @@ scp -r compose/jetson/docker-compose.yml scripts/jetson_capture.sh services/stt_
 ```
 
 ```bash
-ssh aivi@<jetson-ip> 'docker build -t aivi/stt-capture:0.1.0 /tmp/aivi-update/stt_capture'
+ssh aivi@<jetson-ip> 'docker build -t aivi/stt-capture:0.1.1 /tmp/aivi-update/stt_capture'
 ```
 
 The first time, try the relay on a spare port while Speech-to-Phrase still
@@ -352,11 +372,11 @@ ssh -t aivi@<jetson-ip> 'sudo install -m 0755 /tmp/aivi-update/jetson_capture.sh
 ```
 
 ```bash
-ssh aivi@<jetson-ip> 'docker run --rm -d --name stt-capture-trial --network aivi-jetson_default -p 10310:10300 -v /mnt/aivi-capture:/capture:rslave aivi/stt-capture:0.1.0 --upstream tcp://speech-to-phrase:10300'
+ssh aivi@<jetson-ip> 'docker run --rm -d --name stt-capture-trial --network aivi-jetson_default -p 10390:10300 -v /mnt/aivi-capture:/capture:rslave aivi/stt-capture:0.1.1 --upstream tcp://speech-to-phrase:10300'
 ```
 
 ```bash
-uvx --from wyoming==1.10.2 python scripts/wyoming_smoke_test.py stt --host <jetson-ip> --port 10310 --wav test.wav
+uvx --from wyoming==1.10.2 python scripts/wyoming_smoke_test.py stt --host <jetson-ip> --port 10390 --wav test.wav
 ```
 
 ```bash
@@ -574,6 +594,164 @@ On the Mac, `make ww-pull` copies new takes into
 make ww-pull JETSON=<jetson-ip>
 ```
 
+## 11. LLM proxy
+
+`llm-proxy` (`services/llm_proxy`) is the OpenAI-compatible endpoint that Home
+Assistant's **llama.cpp** integration talks to, on port 18001. It forwards
+every request to the cloud model and keeps the provider's key on the Jetson
+([LLM assistant](llm_assistant.md)).
+
+### How it works
+
+- Home Assistant sees one model, `aivi`. The proxy replaces it with
+  `LLM_UPSTREAM_MODEL`, so another model or provider, or later a local
+  server, needs no change in Home Assistant.
+- Requests need the proxy's own key (`LLM_PROXY_API_KEY`) as a bearer token.
+  Without that entry in `.env` the proxy refuses everything.
+- `user` is dropped, because the Mistral API refuses it, and
+  `LLM_UPSTREAM_EXTRA_BODY` is merged in (e.g. provider options).
+- At most `LLM_PROXY_DAILY_REQUEST_LIMIT` requests per UTC day (default 500);
+  then it answers 429 until midnight UTC. A command with tools takes two to
+  three requests.
+- Streaming is refused. Home Assistant notices that when the integration is
+  added and then asks without streaming.
+- Malformed tool arguments get one repair request.
+- Every exchange is appended to
+  `/mnt/aivi-capture/drive/aivi-llm/llm_capture_<UTC day>.jsonl`, but only
+  while the drive is mounted with its marker and the directory exists. A
+  record holds Home Assistant's whole prompt with the exposed devices and
+  their states, the tool calls and the answer, the latency and the token
+  counts; never a key. `LLM_PROXY_ENABLE_CAPTURE=false` in `.env` turns it
+  off.
+
+### Keys
+
+The cloud key (`MISTRAL_API_KEY`) serves the proxy and the speech-to-text
+bridge. Create it in the provider's console with a monthly spending limit.
+The command asks for it without echoing it, creates the proxy key, stores
+both in `.env` and shows the proxy key once, for Home Assistant:
+
+```bash
+ssh -t aivi@<jetson-ip> 'read -rsp "Mistral API key: " k && echo && p=$(openssl rand -hex 24) && printf "MISTRAL_API_KEY=%s\nLLM_PROXY_API_KEY=%s\n" "$k" "$p" | sudo sh -c "cat >> /opt/aivi/compose/.env" && echo "Proxy key for Home Assistant (llama.cpp): $p" && unset k p'
+```
+
+To replace a key, edit `.env` with `sudo nano /opt/aivi/compose/.env` and run
+`docker compose up -d` in `/opt/aivi/compose`.
+
+### Install or update
+
+Copy the files and build the images. The proxy and the bridge install their
+Python packages while building, so the Jetson needs internet access then:
+
+```bash
+ssh aivi@<jetson-ip> 'rm -rf /tmp/aivi-update && mkdir /tmp/aivi-update'
+```
+
+```bash
+scp -r compose/jetson/docker-compose.yml scripts/jetson_capture.sh services/stt_capture services/stt_bridge services/llm_proxy aivi@<jetson-ip>:/tmp/aivi-update/
+```
+
+```bash
+ssh aivi@<jetson-ip> 'cd /tmp/aivi-update && docker build -t aivi/stt-capture:0.1.1 stt_capture && docker build -t aivi/stt-bridge:0.1.0 stt_bridge && docker build -t aivi/llm-proxy:0.2.0 llm_proxy'
+```
+
+Update `aivi-capture`, which creates `aivi-llm/` on the drive, and install
+the compose file, keeping the old one:
+
+```bash
+ssh -t aivi@<jetson-ip> 'sudo sh -c "install -m 0755 /tmp/aivi-update/jetson_capture.sh /usr/local/sbin/aivi-capture && aivi-capture mount && cp -p /opt/aivi/compose/docker-compose.yml /opt/aivi/compose/docker-compose.yml.bak && install -m 0644 /tmp/aivi-update/docker-compose.yml /opt/aivi/compose/docker-compose.yml"'
+```
+
+```bash
+ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d'
+```
+
+Docker recreates `stt-capture` for its new image and starts the new services;
+Speech-to-Phrase keeps running. To roll back, restore the old compose file
+and run `docker compose up -d --remove-orphans` as in
+[section 9](#install-or-update-the-relay).
+
+### Verify
+
+`?upstream=true` also asks the provider for its model list:
+
+```bash
+ssh aivi@<jetson-ip> 'curl -s "localhost:18001/health?upstream=true"'
+```
+
+Expected: `"upstream_ok": true` and `"capture": "ready"`. A chat request with
+the proxy key from `.env`, which never appears on the command line:
+
+```bash
+ssh aivi@<jetson-ip> 'k=$(sed -n "s/^LLM_PROXY_API_KEY=//p" /opt/aivi/compose/.env) && curl -s localhost:18001/v1/chat/completions -H "Authorization: Bearer $k" -H "Content-Type: application/json" -d "{\"model\": \"aivi\", \"messages\": [{\"role\": \"user\", \"content\": \"Sag Hallo.\"}]}"; unset k'
+```
+
+### Change model or provider
+
+These `.env` entries override the defaults of the compose file:
+
+| Entry | Default | Purpose |
+|---|---|---|
+| `LLM_UPSTREAM_MODEL` | `mistral-small-latest` | model behind the alias `aivi` |
+| `LLM_UPSTREAM_BASE_URL` | `https://api.mistral.ai/v1` | any OpenAI-compatible server, e.g. a local llama.cpp or vLLM |
+| `LLM_UPSTREAM_EXTRA_BODY` | empty | JSON object merged into every request |
+| `LLM_PROXY_DAILY_REQUEST_LIMIT` | `500` | requests per UTC day, `0` for no limit |
+| `LLM_PROXY_ENABLE_CAPTURE` | `true` | capture on the drive |
+
+Then recreate the proxy:
+
+```bash
+ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d llm-proxy'
+```
+
+### Fetch the captured exchanges
+
+```bash
+rsync -av aivi@<jetson-ip>:/mnt/aivi-capture/drive/aivi-llm/ dev/datasets/llm/
+```
+
+`training/llm/prepare_dataset.py` and the evaluators in `training/eval/` read
+this layout.
+
+## 12. Cloud speech to text
+
+`stt-bridge` (`services/stt_bridge`) is a Wyoming speech-to-text server that
+sends each request, as one WAV file, to an OpenAI-compatible
+`/audio/transcriptions` endpoint: Mistral's Voxtral Mini Transcribe by
+default. A second relay, `stt-capture-cloud`, serves it on port 10310 and
+captures requests exactly like [section 9](#9-request-capture), now with the
+cloud transcript as pseudo label. Port 10300 with Speech-to-Phrase stays as it
+is.
+
+- The audio stays in memory. A request ends at most 30 s after its start;
+  longer audio is cut to its beginning.
+- The bridge reads the names of the areas, floors and entities exposed to
+  Assist, plus their aliases, over the Home Assistant websocket with the token
+  from [section 4](#4-home-assistant-token), and sends up to 100 of them as
+  `context_bias`. It reads them again every 10 minutes, so renamed devices
+  arrive without a restart.
+- If the provider fails, Home Assistant gets a Wyoming error and logs it
+  with the provider's status; the pipeline then ends with
+  `stt-stream-failed`.
+- The log shows the length of the audio, the time and the number of
+  characters, never the text.
+
+It uses `MISTRAL_API_KEY` from [section 11](#keys), is installed with the
+proxy and needs nothing else. Test it from the Mac with a recording as in
+[section 6](#6-verify):
+
+```bash
+uvx --from wyoming==1.10.2 python scripts/wyoming_smoke_test.py stt --host <jetson-ip> --port 10310 --wav test.wav
+```
+
+In Home Assistant, add the **Wyoming Protocol** integration a third time,
+with host `<jetson-ip>` and port `10310`.
+
+Another transcription API takes `.env` entries too: `STT_API_URL` (default
+`https://api.mistral.ai/v1`) and `STT_MODEL` (default
+`voxtral-mini-latest`). For OpenAI or a Whisper server, add `--bias-field
+prompt` to the bridge's command in the compose file.
+
 ## Logging
 
 `aivi-logmode` switches between two modes:
@@ -587,6 +765,10 @@ shows one line per request: the outcome and whether it was stored, or why
 not (`not_enabled`, `no_listening_satellite`, `no_marker`, …). Transcripts
 never appear in a log. `docker compose logs wake-word-recorder` shows one
 line per take start, refusal and end, without speaker names.
+`docker compose logs llm-proxy` shows one line per chat request (status,
+time, number of tool calls, repair) and the provider's error messages, and
+`docker compose logs stt-bridge` one line per request (length, time,
+characters); neither logs what was said.
 
 ```bash
 ssh -t aivi@192.168.55.1 sudo aivi-logmode prod
@@ -617,6 +799,9 @@ ssh -t aivi@192.168.55.1 sudo rm -rf /var/log/journal
 | No `/dev/cu.usbmodem…` after boot | Charge-only cable, or setup already done | Use a data cable; after setup use SSH instead |
 | Switch `Anfragen aufzeichnen` on, but no samples | Drive not mounted, or the request was refused | `aivi-capture status`; in dev mode the relay log names the reason ([section 9](#9-request-capture)) |
 | Relay log `reason=ha_error` | Token in `.env` invalid, or an entity ID in `--satellite` does not exist | Check the entity IDs on the satellite's device page; renew the token ([section 4](#4-home-assistant-token)) |
+| Assist answers that the daily limit is reached | `LLM_PROXY_DAILY_REQUEST_LIMIT` used up | Wait for midnight UTC, or raise the entry and recreate `llm-proxy` ([section 11](#change-model-or-provider)) |
+| llama.cpp integration: invalid authentication | Proxy key in Home Assistant differs from `LLM_PROXY_API_KEY`, or the entry is missing | Compare the keys; the proxy refuses everything without one ([section 11](#keys)) |
+| `stt-stream-failed` with the LLM pipeline, Home Assistant log names `stt-bridge-upstream` | Provider unreachable or the key is invalid | `curl -s "localhost:18001/health?upstream=true"` on the Jetson; switch the satellite to the Speech-to-Phrase pipeline meanwhile |
 | No speech recognition after installing the relay | `stt-capture` not running, e.g. image not built | `docker compose ps`; build the image or roll back ([section 9](#9-request-capture)) |
 | Drive plugged in, `aivi-capture status` says not mounted | Plugged in after an eject, or udev missed it | `sudo aivi-capture mount` |
 | Satellite status `Fehler: Jetson nicht erreichbar` | `wake-word-recorder` not running, or `wake_word_recorder_host` wrong | `docker compose ps`; check the secret and flash again ([section 10](#10-wake-word-recording)) |
