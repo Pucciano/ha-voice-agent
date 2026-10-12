@@ -616,6 +616,10 @@ every request to the cloud model and keeps the provider's key on the Jetson
 - Streaming is refused. Home Assistant notices that when the integration is
   added and then asks without streaming.
 - Malformed tool arguments get one repair request.
+- An unreachable provider fails at once: at most 10 s to connect, and the
+  answer tells the client not to retry. Its message,
+  `LLM_PROXY_UNAVAILABLE_MESSAGE` ("Das Sprachmodell ist gerade nicht
+  erreichbar."), is what Home Assistant speaks; the cause is in the log.
 - Every exchange is appended to
   `/mnt/aivi-capture/drive/aivi-llm/llm_capture_<UTC day>.jsonl`, but only
   while the drive is mounted with its marker and the directory exists. A
@@ -698,7 +702,15 @@ These `.env` entries override the defaults of the compose file:
 | `LLM_PROXY_DAILY_REQUEST_LIMIT` | `500` | requests per UTC day, `0` for no limit |
 | `LLM_PROXY_ENABLE_CAPTURE` | `true` | capture on the drive |
 
-Then recreate the proxy:
+To try a failure without touching `.env`, start the services with an
+unresolvable host; a shell variable overrides `.env`:
+
+```bash
+ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && LLM_UPSTREAM_BASE_URL=https://api.mistral.invalid/v1 STT_API_URL=https://api.mistral.invalid/v1 docker compose up -d llm-proxy stt-bridge'
+```
+
+`docker compose up -d llm-proxy stt-bridge` without the variables restores
+them. Otherwise, recreate the proxy after changing `.env`:
 
 ```bash
 ssh aivi@<jetson-ip> 'cd /opt/aivi/compose && docker compose up -d llm-proxy'

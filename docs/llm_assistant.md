@@ -42,9 +42,13 @@ Satellite -> Home Assistant, pipeline "AIVI Cloud"
   Assist. The proxy and the second relay keep training data on the Jetson's
   capture drive ([section 9](jetson_setup.md#9-request-capture),
   [section 11](jetson_setup.md#11-llm-proxy)).
-- **Offline**: without internet the LLM pipeline fails with an error. The
+- **Offline**: without internet the LLM pipeline fails at once: speech to
+  text ends with `stt-stream-failed` within about 0.1 s, and the LED ring
+  shows the error. If only the model is down, Home Assistant speaks the
+  proxy's message "Das Sprachmodell ist gerade nicht erreichbar." The
   Speech-to-Phrase pipeline stays configured; switching the satellite's
-  "Assistent" back to it restores voice control.
+  "Assistent" back to it restores voice control (tested on 2026-10-12 with an
+  unresolvable provider host).
 
 ## Set up
 
@@ -141,10 +145,16 @@ For comparison, Speech-to-Phrase needs about 1 s and Whisper on the Nano 5 to
 - **Follow-up questions:** when the agent asks back ("Soll ich ihn
   ausschalten?"), the answer needs the wake word again, because the satellite
   does not continue the conversation.
-- **Appliance plugs:** for Assist, a plug that is on means "running". A
-  question like "Läuft der Trockner noch?" gets "Ja" while the dryer stands
-  idle on its plug. Expose a state that shows the machine's run (e.g. a
-  helper fed by the power sensor) to answer it correctly.
+- **Appliance plugs:** for Assist, a plug that is on means "running", and
+  "Der Trockner läuft nicht mehr" once switched the dryer's plug off. The
+  plugs of the dryer, the washing machine and the dishwasher are therefore
+  not exposed. Instead, three read-only template binary sensors with device
+  class "running" (`binary_sensor.dryer_running`,
+  `binary_sensor.washing_machine_running`,
+  `binary_sensor.dishwasher_running`, named "Trockner", "Waschmaschine",
+  "Spülmaschine") mirror the run helpers that the power-based automations
+  keep, and they are exposed. "Läuft der Trockner noch?" now gets the
+  machine's state, and no misheard sentence can cut a running machine.
 - **Weather:** the weather tool only gives the current conditions, no
   forecast.
 
