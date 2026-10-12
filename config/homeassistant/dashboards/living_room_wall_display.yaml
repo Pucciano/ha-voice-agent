@@ -17,6 +17,12 @@ kiosk_mode:
 
 title: Wanddisplay
 
+button_card_templates:
+  # Room settings for the shared templates.
+  wd_room:
+    variables:
+      home_area: living_room
+
 views:
   - title: Wohnzimmer
     path: home
@@ -27,121 +33,117 @@ views:
       - type: custom:button-card
         template: wd_root
         custom_fields:
-          header:
+          main:
             card:
-              type: custom:button-card
-              template: wd_header
-          weather:
+              type: vertical-stack
+              cards:
+                - type: custom:button-card
+                  template: wd_header
+                - type: custom:button-card
+                  template: wd_weather
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:lightbulb-outline
+                    title: Licht · Wohnzimmer
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_all_off
+                    body:
+                      card:
+                        type: grid
+                        columns: 3
+                        square: false
+                        cards:
+                          - type: custom:button-card
+                            template: wd_light_tile
+                            entity: light.living_room_highboard_glass_cabinet
+                            name: Vitrine
+                            icon: mdi:vanity-light
+                          - type: custom:button-card
+                            template: wd_light_tile
+                            entity: light.living_room_diner_table_pendant_lamp
+                            name: Pendel
+                            icon: mdi:ceiling-light-multiple
+                          - type: custom:button-card
+                            template: wd_light_tile
+                            entity: light.living_room_floor_lamp_bulb_1
+                            name: Stehlampe
+                            icon: mdi:floor-lamp
+          side:
             card:
-              type: custom:button-card
-              template: wd_weather
-          lights:
-            card:
-              type: custom:button-card
-              template: wd_section
-              variables:
-                icon: mdi:lightbulb-outline
-                title: Licht · Wohnzimmer
-              custom_fields:
-                aside:
-                  card:
-                    type: custom:button-card
-                    template: wd_all_off
-                body:
-                  card:
-                    type: grid
-                    columns: 3
-                    square: false
-                    cards:
-                      - type: custom:button-card
-                        template: wd_light_tile
-                        entity: light.living_room_highboard_glass_cabinet
-                        name: Vitrine
-                        icon: mdi:vanity-light
-                      - type: custom:button-card
-                        template: wd_light_tile
-                        entity: light.living_room_diner_table_pendant_lamp
-                        name: Pendel
-                        icon: mdi:ceiling-light-multiple
-                      - type: custom:button-card
-                        template: wd_light_tile
-                        entity: light.living_room_floor_lamp_bulb_1
-                        name: Stehlampe
-                        icon: mdi:floor-lamp
-          music:
-            card:
-              type: custom:button-card
-              template: wd_section
-              variables:
-                icon: mdi:music-note
-                title: Musik
-              custom_fields:
-                aside:
-                  card:
-                    type: custom:button-card
-                    template: wd_music_where
-                body:
-                  card:
-                    type: custom:button-card
-                    template: wd_music
-          climate:
-            card:
-              type: custom:button-card
-              template: wd_section
-              variables:
-                icon: mdi:thermometer
-                title: Raumklima
-              custom_fields:
-                aside:
-                  card:
-                    type: custom:button-card
-                    template: wd_window_pill
-                body:
-                  card:
-                    type: custom:button-card
-                    template: wd_climate_card
-          devices:
-            card:
-              type: conditional
-              conditions:
-                - condition: or
+              type: vertical-stack
+              cards:
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:music-note
+                    title: Musik
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_music_where
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_music
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:thermometer
+                    title: Raumklima
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_window_pill
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_climate_card
+                - type: conditional
                   conditions:
-                    - condition: state
-                      entity: input_boolean.washer_running
-                      state: 'on'
-                    - condition: state
-                      entity: input_boolean.dryer_running
-                      state: 'on'
-                    - condition: numeric_state
-                      entity: sensor.laundry_washing_machine_plug_power
-                      above: 5
-                    - condition: numeric_state
-                      entity: sensor.laundry_dryer_plug_power
-                      above: 5
-              card:
-                type: custom:button-card
-                template: wd_section
-                variables:
-                  icon: mdi:washing-machine
-                  title: Geräte
-                custom_fields:
-                  aside:
-                    card:
-                      type: custom:button-card
-                      template: wd_devices_pill
-                  body:
-                    card:
-                      type: grid
-                      columns: 2
-                      square: false
-                      cards:
-                        - type: custom:button-card
-                          template: wd_appliance_tile
+                    - condition: or
+                      conditions:
+                        - condition: state
+                          entity: input_boolean.washer_running
+                          state: 'on'
+                        - condition: state
+                          entity: input_boolean.dryer_running
+                          state: 'on'
+                        - condition: numeric_state
                           entity: sensor.laundry_washing_machine_plug_power
-                          name: Waschmaschine
-                          icon: mdi:washing-machine
-                        - type: custom:button-card
-                          template: wd_appliance_tile
+                          above: 5
+                        - condition: numeric_state
                           entity: sensor.laundry_dryer_plug_power
-                          name: Trockner
-                          icon: mdi:tumble-dryer
+                          above: 5
+                  card:
+                    type: custom:button-card
+                    template: wd_section
+                    variables:
+                      icon: mdi:washing-machine
+                      title: Geräte
+                    custom_fields:
+                      aside:
+                        card:
+                          type: custom:button-card
+                          template: wd_devices_pill
+                      body:
+                        card:
+                          type: grid
+                          columns: 2
+                          square: false
+                          cards:
+                            - type: custom:button-card
+                              template: wd_appliance_tile
+                              entity: sensor.laundry_washing_machine_plug_power
+                              name: Waschmaschine
+                              icon: mdi:washing-machine
+                            - type: custom:button-card
+                              template: wd_appliance_tile
+                              entity: sensor.laundry_dryer_plug_power
+                              name: Trockner
+                              icon: mdi:tumble-dryer

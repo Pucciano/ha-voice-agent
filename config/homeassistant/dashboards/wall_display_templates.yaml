@@ -7,6 +7,9 @@
 # The root card `wd_root` sets the palette (light by day, dark while the sun
 # is below the horizon) as CSS variables and holds every section as a nested
 # card. All JavaScript lives in these templates.
+#
+# Every room file defines the template `wd_room` with its room settings:
+#   variables.home_area  area id listed first in the climate section
 
 button_card_templates:
   # ---------------------------------------------------------------- basics --
@@ -193,9 +196,18 @@ button_card_templates:
           'sun': '#E3A54A', 'rain': '#8FB0C4'
         };
         const vars = Object.entries(dark ? night : day).map(([k, v]) => `--wd-${k}: ${v};`).join(' ');
+        // Two columns on a landscape screen; button-card writes the grid
+        // styles inline, so the media query needs !important.
         return `:host { ${vars} --wd-font: 'Figtree', system-ui, sans-serif;
-          --wd-display: 'Newsreader', Georgia, serif; --grid-card-gap: 10px; }`;
+          --wd-display: 'Newsreader', Georgia, serif; --grid-card-gap: 10px;
+          --vertical-stack-card-gap: 20px; }
+          @media (min-width: 900px) and (orientation: landscape) {
+            #container { grid-template-areas: "main side" !important;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; column-gap: 20px !important; }
+          }`;
       ]]]
+    # The sections sit in two vertical stacks, `main` and `side`: one below
+    # the other in portrait, side by side on a landscape screen.
     styles:
       card:
         - padding: 18px 16px 28px
@@ -203,23 +215,17 @@ button_card_templates:
         - min-height: 100vh
         - background: var(--wd-bg)
       grid:
-        - grid-template-areas: '"header" "weather" "lights" "music" "climate" "devices"'
+        - grid-template-areas: '"main" "side"'
         - grid-template-columns: minmax(0, 1fr)
         - row-gap: 20px
         - align-content: start
       custom_fields:
-        header:
+        main:
           - justify-self: stretch
-        weather:
+          - align-self: start
+        side:
           - justify-self: stretch
-        lights:
-          - justify-self: stretch
-        music:
-          - justify-self: stretch
-        climate:
-          - justify-self: stretch
-        devices:
-          - justify-self: stretch
+          - align-self: start
 
   # ---------------------------------------------------------------- header --
   wd_header:
@@ -1063,10 +1069,11 @@ button_card_templates:
   # Rooms of the climate section, read from Home Assistant: every area with
   # the label wall_display_climate and a temperature sensor in its area
   # settings, in the area order of Home Assistant with the display's own area
-  # first. Openings are the contacts with the label all_windows in that area.
+  # (home_area from the room file's wd_room) first. Openings are the contacts
+  # with the label all_windows in that area.
   wd_climate_rooms:
+    template: wd_room
     variables:
-      home_area: living_room
       rooms: |
         [[[
           const areaOf = (id) => {

@@ -184,6 +184,8 @@ def test_repository_dashboards_build():
     assert set(configs) == set(wd.DASHBOARDS)
     for config in configs.values():
         assert config["views"][0]["cards"][0]["template"] == "wd_root"
+        room_settings = config["button_card_templates"]["wd_room"]
+        assert room_settings["variables"]["home_area"]
 
 
 # -------------------------------------------------------------- backups --
