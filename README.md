@@ -102,7 +102,7 @@ services/
   stt_capture/                     Wyoming relay that stores voice requests for STT training
   wake_word_recorder/              stores wake word training takes streamed by the satellites
   stt_faster_whisper/              custom Whisper container build
-scripts/                           model download, health checks, smoke tests
+scripts/                           model download, health checks, smoke tests, wall display deploy
 training/
   eval/                            evaluation scripts (validity, latency, compliance)
   llm/                             LoRA fine-tuning and dataset preparation
@@ -249,8 +249,9 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
   (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
   capture of voice requests for STT training, and the wake word recorder.
-- `docs/wall_display.md` covers the living room wall display: dashboard
-  layout, display settings, Home Assistant prerequisites and deployment.
+- `docs/wall_display.md` covers the wall displays in the living room and
+  the bedroom: shared design, layout, device settings, Home Assistant
+  prerequisites and the deploy script.
 
 ## Makefile helpers
 
@@ -262,6 +263,8 @@ make prod-up          # start production stack
 make prod-down        # stop production stack
 make test             # run compileall and basic checks
 make aec-tuning-test  # echo canceller self test engine against a simulated room
+make wall-display-check   # validate the wall display dashboards offline
+make wall-display-deploy HA_ENV=<env-file>   # save changed wall displays (with backup)
 make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU
 make sat-chip DEVICE=/dev/cu.usbmodemXXXX           # identify the ESP32
 make sat-flash SAT=living-room DEVICE=<port-or-ip>   # build and flash

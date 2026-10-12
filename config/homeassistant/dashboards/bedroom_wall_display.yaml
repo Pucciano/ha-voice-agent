@@ -1,0 +1,184 @@
+# Bedroom wall display ("Schlafzimmer"), a tablet or phone in portrait or
+# landscape. Storage-mode dashboard `dashboard-bedroom-wall-display`, built
+# from this file and the shared templates in wall_display_templates.yaml by
+# scripts/wall_display_deploy.py. Setup and prerequisites:
+# docs/wall_display.md.
+#
+# Layout: one panel view with the root card `wd_root`; every section is a
+# nested card. This file holds only entity ids, labels and room settings.
+# The device opens the dashboard with kiosk-mode's `?kiosk` query string.
+
+title: Schlafzimmer
+
+button_card_templates:
+  # Room settings for the shared templates.
+  wd_room:
+    variables:
+      home_area: bed_room
+
+views:
+  - title: Schlafzimmer
+    path: home
+    icon: mdi:bed-outline
+    type: panel
+    theme: scandi_beige
+    cards:
+      - type: custom:button-card
+        template: wd_root
+        custom_fields:
+          main:
+            card:
+              type: vertical-stack
+              cards:
+                - type: custom:button-card
+                  template: wd_header
+                - type: custom:button-card
+                  template: wd_weather
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:lightbulb-outline
+                    title: Licht · Schlafzimmer
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_all_off
+                    body:
+                      card:
+                        type: grid
+                        columns: 2
+                        square: false
+                        cards:
+                          - type: custom:button-card
+                            template: wd_light_tile
+                            entity: light.schlafzimmer_bed_room_ceiling_light
+                            name: Decke
+                            icon: mdi:ceiling-light
+                          # The bed is a WLED strip with one segment.
+                          # The wardrobe lights have no tile: they stay on and
+                          # follow their own sensors.
+                          - type: custom:button-card
+                            template: wd_light_tile
+                            entity: light.bedroom_bed_wled
+                            name: Bett
+                            icon: mdi:bed
+                # The scenes are still being set up; a tile without its
+                # entity shows "Nicht angelegt".
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:palette-outline
+                    title: Lichtszenen
+                  custom_fields:
+                    body:
+                      card:
+                        type: grid
+                        columns: 3
+                        square: false
+                        cards:
+                          - type: custom:button-card
+                            template: wd_scene_tile
+                            entity: scene.bedroom_love
+                            name: Love
+                            icon: mdi:heart-outline
+                          - type: custom:button-card
+                            template: wd_scene_tile
+                            entity: scene.bedroom_day
+                            name: Day
+                            icon: mdi:white-balance-sunny
+                          - type: custom:button-card
+                            template: wd_scene_tile
+                            entity: scene.bedroom_night
+                            name: Night
+                            icon: mdi:weather-night
+                          - type: custom:button-card
+                            template: wd_scene_tile
+                            entity: scene.bedroom_ocean
+                            name: Ocean
+                            icon: mdi:waves
+                          - type: custom:button-card
+                            template: wd_scene_tile
+                            entity: scene.bedroom_sunset
+                            name: Sunset
+                            icon: mdi:weather-sunset
+                          - type: custom:button-card
+                            template: wd_scene_tile
+                            entity: scene.bedroom_reading
+                            name: Reading
+                            icon: mdi:book-open-variant
+          side:
+            card:
+              type: vertical-stack
+              cards:
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:music-note
+                    title: Musik
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_music_where
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_music
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:thermometer
+                    title: Raumklima
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_window_pill
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_climate_card
+                - type: conditional
+                  conditions:
+                    - condition: or
+                      conditions:
+                        - condition: state
+                          entity: input_boolean.washer_running
+                          state: 'on'
+                        - condition: state
+                          entity: input_boolean.dryer_running
+                          state: 'on'
+                        - condition: numeric_state
+                          entity: sensor.laundry_washing_machine_plug_power
+                          above: 5
+                        - condition: numeric_state
+                          entity: sensor.laundry_dryer_plug_power
+                          above: 5
+                  card:
+                    type: custom:button-card
+                    template: wd_section
+                    variables:
+                      icon: mdi:washing-machine
+                      title: Geräte
+                    custom_fields:
+                      aside:
+                        card:
+                          type: custom:button-card
+                          template: wd_devices_pill
+                      body:
+                        card:
+                          type: grid
+                          columns: 2
+                          square: false
+                          cards:
+                            - type: custom:button-card
+                              template: wd_appliance_tile
+                              entity: sensor.laundry_washing_machine_plug_power
+                              name: Waschmaschine
+                              icon: mdi:washing-machine
+                            - type: custom:button-card
+                              template: wd_appliance_tile
+                              entity: sensor.laundry_dryer_plug_power
+                              name: Trockner
+                              icon: mdi:tumble-dryer

@@ -1,13 +1,34 @@
-# Living room wall display
+# Wall displays
 
-The living room has a Shelly Wall Display X2i, mounted in portrait. It shows
-the Home Assistant dashboard "Bedienfeld" (`dashboard-living-room-wall-display`).
-The dashboard is versioned in
-`config/homeassistant/dashboards/living_room_wall_display.yaml`.
+Two Home Assistant dashboards share one design:
+
+| Dashboard | Device | Room file |
+|---|---|---|
+| "Bedienfeld" (`dashboard-living-room-wall-display`) | Shelly Wall Display X2i in the living room, portrait | `living_room_wall_display.yaml` |
+| "Schlafzimmer" (`dashboard-bedroom-wall-display`) | Tablet or phone in the bedroom, portrait or landscape | `bedroom_wall_display.yaml` |
+
+## Files
+
+The files live in `config/homeassistant/dashboards/`:
+
+- `wall_display_templates.yaml` holds every button-card template: palette,
+  fonts, sections and tiles. It is the only place for colours and design.
+- A room file holds the title, kiosk-mode settings, the views with their
+  entity ids, and the template `wd_room` with the room settings.
+  `home_area` is the area listed first in the climate section.
+
+A room file may add templates, but it must not replace a shared one. Home
+Assistant cannot include files in a storage dashboard, so
+`scripts/wall_display_deploy.py` merges the shared file into each room file
+and saves the result (see Deploy).
 
 ## Layout
 
-From top to bottom:
+The root card holds two stacks of sections, `main` and `side`. They sit one
+below the other, and side by side on a landscape screen at least 900 CSS px
+wide. The Shelly display (464 px) therefore shows one column.
+
+The living room, from top to bottom:
 
 | Section | Content |
 |---|---|
@@ -19,10 +40,22 @@ From top to bottom:
 | Raumklima | Temperature, humidity and window state per room, with the time a window was opened |
 | Geräte | Washing machine and dryer, while one of them runs or draws more than 5 W |
 
-The palette follows `sun.sun`: light (`scandi_beige` colours) by day, dark
-while the sun is below the horizon.
+The bedroom has the same header, weather, music, climate and appliance
+sections. In between:
 
-## Display settings
+| Section | Content |
+|---|---|
+| Licht · Schlafzimmer | Ceiling light and bed (a WLED strip with one segment); "Alle N aus" as in the living room. The wardrobe lights have no tile: they stay on and follow their own sensors |
+| Lichtszenen | Love, Day, Night, Ocean, Sunset and Reading in two rows of three; a tap activates the scene, a long press opens its details |
+
+The climate section lists the bedroom first. `main` holds the header,
+weather, lights and scenes; `side` holds music, climate and appliances.
+
+The palette follows `sun.sun`: light (`scandi_beige` colours) by day, dark
+while the sun is below the horizon. The view theme `scandi_beige` styles the
+Home Assistant dialogs, for example the details of a light.
+
+## Living room display settings
 
 The usable area is 464 × 904 CSS px: the panel has 720 × 1440 px at 240 dpi,
 and the Shelly firmware keeps a small frame around the web view.
@@ -46,6 +79,21 @@ page as deprecated in favour of an app from the Shelly app store, and 2.7.0
 reverted that. Keep using the built-in page: the bottom bar setting only
 applies there.
 
+## Bedroom device
+
+The tablet or phone opens the dashboard with kiosk-mode's query string,
+which hides the header and the sidebar:
+
+```text
+http://<home-assistant>:8123/dashboard-bedroom-wall-display/home?kiosk
+```
+
+`?kiosk&cache` stores this on the device, so it also applies after
+navigating, but then on every dashboard. The bedroom room file sets no
+kiosk-mode user, so the dashboard looks normal on other devices. If the
+device logs in with a user of its own, set **Dashboard** in that user's
+profile to "Schlafzimmer".
+
 ## Home Assistant prerequisites
 
 - HACS frontend cards: `button-card` (tested 7.0.1) and `kiosk-mode` (tested
@@ -63,9 +111,11 @@ applies there.
   names or room entities.
 - Label `light_count_exclude` on lights that are part of a lamp or group that
   is already counted: the eight pendant bulbs, the corridor spots 1, 2, 4 and
-  5, the two office lamp bulbs and the WLED master of the bed light. Without
-  it the summary counts bulbs instead of lamps. Give new group members this
-  label too.
+  5 and the two office lamp bulbs. Without it the summary counts bulbs
+  instead of lamps. Give new group members this label too. The label also
+  keeps lights that stay on out of the count and out of "Alle N aus": the
+  two IKEA PAX wardrobe lights in the bedroom, which follow their own
+  sensors.
 - Template helper "Active media player" (Settings → Devices & services →
   Helpers → Template → Sensor). Its state template is
   `config/homeassistant/helpers/active_media_player.jinja`. The entity is
@@ -78,6 +128,10 @@ applies there.
   below 4 W. A washing machine drops to about 3 W for seconds to minutes
   during a programme, so the Geräte section and the appliance tiles follow
   these flags instead of the plug power.
+- Scenes `scene.bedroom_love`, `scene.bedroom_day`, `scene.bedroom_night`,
+  `scene.bedroom_ocean`, `scene.bedroom_sunset` and `scene.bedroom_reading`
+  for the bedroom scene tiles. A tile without its entity shows "Nicht angelegt" and does nothing.
+  A tile also takes a script; it then runs `script.turn_on`.
 - `sensor.time` from the Time & Date integration drives the clock.
 - Weather from the Deutscher Wetterdienst, see Weather sources.
 - The two font files in `/config/www/fonts/` (see Fonts).
@@ -108,13 +162,52 @@ using the met.no entity `weather.forecast_zuhause`.
 
 ## Deploy
 
-Open the dashboard, then **Edit → three-dot menu → Raw configuration editor**,
-replace everything with the YAML file and save. Home Assistant stores the
-dashboard without comments, so the repository file is the source. The display
-picks up the change within a few seconds without a reload.
+`scripts/wall_display_deploy.py` builds each dashboard from the shared
+templates and its room file and saves it over the Home Assistant websocket
+API. It needs `HA_URL` and `HA_TOKEN` (a long-lived access token of an admin
+user), from the environment or from the file in `HA_ENV` (default `.env`,
+see `.env.example`).
 
-All JavaScript lives in the `button_card_templates`. The sections in `views`
-contain only entity ids and labels.
+```bash
+make wall-display-check
+```
+
+```bash
+make wall-display-diff HA_ENV=<path-to-env-file>
+```
+
+```bash
+make wall-display-deploy HA_ENV=<path-to-env-file>
+```
+
+- `check` works offline. It stops on invalid YAML, a duplicate key, a
+  template that is missing or inherits from itself, and on a room file that
+  replaces a shared template. The YAML is read with the booleans of YAML
+  1.2, as in the Home Assistant frontend: `on`, `off`, `yes` and `no` stay
+  strings.
+- `diff` shows how Home Assistant differs from the repository.
+- `deploy` shows the same diff and asks before saving (`YES=1` skips the
+  question). It saves only dashboards that differ, so a second run changes
+  nothing. Before saving it backs up every wall display to
+  `~/.config/aivi/backups/wall_display_<url_path>_<time>.json`
+  (`--backup-dir` to change), then reads each saved dashboard back and
+  compares it.
+- `restore <backup>` saves a backup again, after backing up the current
+  state:
+
+```bash
+uv run --no-project --with pyyaml==6.0.3 --with websockets==16.0 python scripts/wall_display_deploy.py restore <backup-file> --env-file <path-to-env-file>
+```
+
+Changes made in the raw configuration editor are overwritten by the next
+deploy; `diff` shows them first. A new wall display needs a storage
+dashboard in Home Assistant (Settings → Dashboards → Add dashboard → "New
+dashboard from scratch") and an entry in `DASHBOARDS` in the script.
+
+The display picks up a saved dashboard after the page reloads.
+
+All JavaScript lives in the shared templates. The views contain only entity
+ids and labels.
 
 The climate section has eight row slots; an area beyond the eighth needs
 another slot in `wd_climate_card`.
@@ -168,6 +261,10 @@ Shelly app; both are open to the whole network otherwise.
 |---|---|
 | HA header and sidebar visible | kiosk-mode `users` does not match the display name of the logged-in user |
 | Display starts with "Übersicht" after a reboot | The profile of the display user has **Dashboard** on "Auto"; set it to "Bedienfeld" |
+| "Button-card template 'wd_room' is missing!" | The room file lacks `wd_room`; `make wall-display-check` reports it before a deploy |
+| Deploy stops with "must not replace shared ones" | A room file defines a template with the name of a shared one; rename it or change the shared template |
+| Header and sidebar visible on the bedroom device | The URL lacks `?kiosk` |
+| Scene tile shows "Nicht angelegt" | The scene entity does not exist yet or has another entity id |
 | Volume follows a drag on the slider, but the speaker does not change | The Shelly app takes over horizontal swipes and cancels the touch, so no `change` event fires; the slider therefore also sends on `touchend` and `touchcancel` |
 | "Vorhersage wird geladen …" | The daily forecast arrives through a websocket subscription; it shows within a minute. If it stays, check that `weather.dwd` exists and has a forecast |
 | Summary counts too many lights | A group member lacks the label `light_count_exclude` |
