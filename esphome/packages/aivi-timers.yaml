@@ -1,0 +1,160 @@
+# AIVI satellite: timer package (issue #19)
+#
+# Home Assistant runs voice timers ("Stelle einen Timer auf zwei Minuten")
+# only for a device that announces timer support, and ESPHome's voice
+# assistant announces it once a timer trigger is configured. Without it the
+# built-in agent answers "Timer werden auf diesem Gerät nicht unterstützt"
+# and an LLM agent never gets the timer tools. Home Assistant keeps the
+# timers and tells the satellite when one starts, changes, is cancelled or
+# finishes; the voice assistant keeps the list (id(va).get_timers()) and
+# counts it down every second in between.
+#
+# The LED ring (aivi-leds.yaml) shows the timer that ends next as a
+# countdown. A finished timer rings:
+#   1. A gong (sounds/timer_finished.wav, from
+#      scripts/generate_timer_sound.py) plays on Audioausgang, so through the
+#      jack; the automation "AIVI Klinkenausgang" switches the room speaker
+#      to its analog input, whatever Audioausgabe says. The gong is in the
+#      echo reference, so the wake word is heard over it.
+#   2. The satellite sends esphome.aivi_timer with phase finished; the
+#      automation "AIVI Timer-Ansage" speaks the timer's name and duration
+#      on Audioausgang, and the gong waits for it.
+#   3. The gong repeats every 3 s, for 2 minutes at most
+#      (timer_alarm_max_ms); the LED ring then keeps pulsing slowly.
+# A wake word during the alarm, or while the ring still pulses, ends it and
+# starts no command (aivi-voice-input.yaml). Music on Audioausgang stays
+# ducked while the gong repeats.
+#
+# Events to Home Assistant, each with the satellite_id:
+#   esphome.aivi_timer   phase finished (name, total_seconds), silenced (the
+#                        gong stopped on its own, the ring still pulses) or
+#                        stopped (a wake word ended the alarm)
+#
+# Requires aivi-voice-input.yaml (va, assistant_paused) and
+# aivi-audio-output.yaml (aivi_player, stop_local_audio, unduck_media, and
+# the timer_finished sound).
+
+substitutions:
+  # Alarm states, shared with aivi-voice-input.yaml, aivi-audio-output.yaml
+  # and aivi-leds.yaml.
+  timer_alarm_off: "0"
+  timer_alarm_ringing: "1"
+  # The gong stopped on its own; the LED ring still shows the alarm.
+  timer_alarm_silent: "2"
+  timer_alarm_max_ms: "120000"
+
+globals:
+  - id: timer_alarm
+    type: int
+    initial_value: ${timer_alarm_off}
+  # millis() when the first gong of the current alarm started.
+  - id: timer_alarm_start_ms
+    type: uint32_t
+    initial_value: "0"
+
+voice_assistant:
+  on_timer_finished:
+    - script.execute:
+        id: ring_timer_alarm
+        timer_name: !lambda return timer.name;
+        timer_seconds: !lambda return timer.total_seconds;
+
+script:
+  # Restarted by every finished timer: the last one is announced.
+  - id: ring_timer_alarm
+    mode: restart
+    parameters:
+      timer_name: string
+      timer_seconds: int
+    then:
+      - lambda: id(timer_alarm) = ${timer_alarm_ringing};
+      # A command, its answer, a self test or a wake word take finishes
+      # first.
+      - wait_until:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - not:
+                  media_player.is_announcing: aivi_player
+              - lambda: return !id(assistant_paused);
+          timeout: 60s
+      - lambda: id(timer_alarm_start_ms) = millis();
+      - script.execute: play_timer_gong
+      - script.wait: play_timer_gong
+      - homeassistant.event:
+          event: esphome.aivi_timer
+          data:
+            satellite_id: ${satellite_id}
+            phase: finished
+            name: !lambda return timer_name;
+            total_seconds: !lambda return std::to_string(timer_seconds);
+      # "AIVI Timer-Ansage" speaks now; without it the gong goes on.
+      - wait_until:
+          condition:
+            media_player.is_announcing: aivi_player
+          timeout: 10s
+      - wait_until:
+          condition:
+            not:
+              media_player.is_announcing: aivi_player
+          timeout: 30s
+      - while:
+          condition:
+            lambda: return millis() - id(timer_alarm_start_ms) < ${timer_alarm_max_ms};
+          then:
+            - delay: 1500ms
+            - script.execute: play_timer_gong
+            - script.wait: play_timer_gong
+      - lambda: id(timer_alarm) = ${timer_alarm_silent};
+      - script.execute: unduck_after_alarm
+      - homeassistant.event:
+          event: esphome.aivi_timer
+          data:
+            satellite_id: ${satellite_id}
+            phase: silenced
+
+  # Plays the gong once and returns when it has ended.
+  - id: play_timer_gong
+    then:
+      - media_player.play_media:
+          id: aivi_player
+          media_url: audio-file://timer_finished
+          announcement: true
+      - wait_until:
+          condition:
+            media_player.is_announcing: aivi_player
+          timeout: 2s
+      - wait_until:
+          condition:
+            not:
+              media_player.is_announcing: aivi_player
+          timeout: 5s
+
+  # Ends a ringing or silenced alarm; called for a wake word.
+  - id: stop_timer_alarm
+    then:
+      - lambda: id(timer_alarm) = ${timer_alarm_off};
+      - script.stop: ring_timer_alarm
+      - script.stop: play_timer_gong
+      - script.execute: stop_local_audio
+      - script.execute: unduck_after_alarm
+      - homeassistant.event:
+          event: esphome.aivi_timer
+          data:
+            satellite_id: ${satellite_id}
+            phase: stopped
+
+  # The player unducks music when an announcement ends, but not between two
+  # gongs; once the alarm is over, nothing else may be left to end.
+  - id: unduck_after_alarm
+    then:
+      - if:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - not:
+                  media_player.is_announcing: aivi_player
+          then:
+            - script.execute: unduck_media

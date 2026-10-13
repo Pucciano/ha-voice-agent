@@ -245,7 +245,7 @@ Further setup and operational guides live in the `docs/` directory:
   microWakeWord, from synthetic samples and household recordings.
 - `docs/satellite_flashing.md` is the per-room runbook for flashing a
   satellite board (XVF3800 firmware, ESP32, verification), routing its
-  answers, and the echo canceller self test.
+  answers, the echo canceller self test, and voice timers.
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
   (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
   capture of voice requests for STT training, and the wake word recorder.
