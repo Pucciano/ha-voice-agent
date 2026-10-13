@@ -32,6 +32,40 @@ views:
               cards:
                 - type: custom:button-card
                   template: wd_header
+                # Sunrise alarm on the bed light, see
+                # docs/bedroom_sunrise_alarm.md.
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:weather-sunset-up
+                    title: Lichtwecker
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_alarm_switch
+                        entity: input_boolean.bedroom_alarm_enabled
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_alarm
+                        entity: input_datetime.bedroom_alarm_time
+                        variables:
+                          enabled: input_boolean.bedroom_alarm_enabled
+                          duration: input_number.bedroom_alarm_sunrise_minutes
+                          workdays_only: input_boolean.bedroom_alarm_workdays_only
+                          days:
+                            - input_boolean.bedroom_alarm_mon
+                            - input_boolean.bedroom_alarm_tue
+                            - input_boolean.bedroom_alarm_wed
+                            - input_boolean.bedroom_alarm_thu
+                            - input_boolean.bedroom_alarm_fri
+                            - input_boolean.bedroom_alarm_sat
+                            - input_boolean.bedroom_alarm_sun
+                          script: script.bedroom_sunrise
+                          light: light.bedroom_bed_wled
+                          workday_sensor: binary_sensor.arbeitstag
+                          workday_calendar: calendar.arbeitstag_kalender
                 - type: custom:button-card
                   template: wd_weather
                 - type: custom:button-card

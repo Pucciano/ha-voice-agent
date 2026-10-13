@@ -1,0 +1,66 @@
+# Helpers of the bedroom sunrise alarm (issue #24), in the shape of
+# configuration.yaml. In Home Assistant they are UI helpers (Settings ->
+# Devices & services -> Helpers), created through the websocket commands
+# `<domain>/create`; keep this copy and Home Assistant in sync. See
+# docs/bedroom_sunrise_alarm.md.
+#
+# A UI helper takes its entity id from the name it is created with, so each
+# one is created with its key as the name and renamed afterwards. None of
+# them has an `initial` value: that would replace the restored state after
+# every restart. The first values (06:30, 60 minutes, Monday to Friday) are
+# set once after creating them.
+#
+# None of these entities is exposed to Assist, so their names stay out of
+# the Speech-to-Phrase vocabulary.
+
+input_boolean:
+  bedroom_alarm_enabled:
+    name: Lichtwecker
+    icon: mdi:weather-sunset-up
+  # On: the alarm runs only on workdays of binary_sensor.arbeitstag
+  # (Workday integration), on top of the weekday selection.
+  bedroom_alarm_workdays_only:
+    name: Lichtwecker nur an Arbeitstagen
+    icon: mdi:briefcase-outline
+  bedroom_alarm_mon:
+    name: Lichtwecker Montag
+    icon: mdi:calendar-week
+  bedroom_alarm_tue:
+    name: Lichtwecker Dienstag
+    icon: mdi:calendar-week
+  bedroom_alarm_wed:
+    name: Lichtwecker Mittwoch
+    icon: mdi:calendar-week
+  bedroom_alarm_thu:
+    name: Lichtwecker Donnerstag
+    icon: mdi:calendar-week
+  bedroom_alarm_fri:
+    name: Lichtwecker Freitag
+    icon: mdi:calendar-week
+  bedroom_alarm_sat:
+    name: Lichtwecker Samstag
+    icon: mdi:calendar-weekend
+  bedroom_alarm_sun:
+    name: Lichtwecker Sonntag
+    icon: mdi:calendar-weekend
+
+input_datetime:
+  # The time the light is fully bright; the sunrise starts its duration
+  # earlier.
+  bedroom_alarm_time:
+    name: Lichtwecker Weckzeit
+    has_date: false
+    has_time: true
+    icon: mdi:alarm
+
+input_number:
+  # WLED's Sunrise effect takes its duration in minutes from the effect
+  # speed, at most 60.
+  bedroom_alarm_sunrise_minutes:
+    name: Lichtwecker Dauer
+    min: 10
+    max: 60
+    step: 5
+    mode: slider
+    unit_of_measurement: min
+    icon: mdi:timer-sand
