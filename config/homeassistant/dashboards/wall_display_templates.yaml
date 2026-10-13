@@ -69,13 +69,22 @@ button_card_templates:
   wd_light_counter:
     variables:
       # Lights that are on, without group members and other parts of a lamp.
+      # A light is also skipped while an excluded light of the same device is
+      # off: the segments of a WLED controller keep reporting on after its
+      # master light has turned the LEDs off.
       counted_on: |
         [[[
-          return Object.keys(states).filter((id) =>
-            id.startsWith('light.')
-            && states[id].state === 'on'
-            && !(hass.entities[id]?.labels || []).includes('light_count_exclude')
-            && !hass.entities[id]?.hidden);
+          const excluded = (id) => (hass.entities[id]?.labels || []).includes('light_count_exclude');
+          const lights = Object.keys(states).filter((id) => id.startsWith('light.'));
+          const dark = new Set(lights
+            .filter((id) => excluded(id) && states[id].state === 'off')
+            .map((id) => hass.entities[id]?.device_id)
+            .filter((d) => d));
+          return lights.filter((id) =>
+            states[id].state === 'on'
+            && !excluded(id)
+            && !hass.entities[id]?.hidden
+            && !dark.has(hass.entities[id]?.device_id));
         ]]]
 
   wd_openings:

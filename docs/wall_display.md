@@ -117,7 +117,11 @@ profile to "Schlafzimmer".
   instead of lamps. Give new group members this label too. The label also
   keeps lights that stay on out of the count and out of "Alle N aus": the
   two IKEA PAX wardrobe lights in the bedroom, which follow their own
-  sensors.
+  sensors. While a light with the label is off, the other lights of its
+  device do not count either: a WLED controller with several segments has a
+  master light, which gets the label, and its segments keep reporting on
+  after the master has turned the LEDs off. A device with several
+  independent lights therefore must not carry the label on one of them.
 - Template helper "Active media player" (Settings → Devices & services →
   Helpers → Template → Sensor). Its state template is
   `config/homeassistant/helpers/active_media_player.jinja`. The entity is
@@ -274,6 +278,7 @@ Shelly app; both are open to the whole network otherwise.
 | Volume follows a drag on the slider, but the speaker does not change | The Shelly app takes over horizontal swipes and cancels the touch, so no `change` event fires; the slider therefore also sends on `touchend` and `touchcancel` |
 | "Vorhersage wird geladen …" | The daily forecast arrives through a websocket subscription; it shows within a minute. If it stays, check that `weather.dwd` exists and has a forecast |
 | Summary counts too many lights | A group member lacks the label `light_count_exclude` |
+| Summary counts too few lights | A light with the label `light_count_exclude` is off and shares its device with a light that is on |
 | Music card controls the wrong speaker | Check `sensor.active_media_player` in the developer tools |
 | A room is missing in the climate section | The area lacks the label `wall_display_climate` or a temperature sensor in its settings |
 | Geräte section disappears while the machine runs | The running flag is off; check the two laundry automations and `input_boolean.washer_running` |
