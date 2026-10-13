@@ -1,6 +1,7 @@
 .PHONY: dev-up dev-up-debug dev-down prod-up prod-down lint format test eval \
 	stt-capture-test wake-word-recorder-test aec-tuning-test \
 	llm-proxy-test stt-bridge-test \
+	wall-display-check wall-display-diff wall-display-deploy wall-display-test \
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
 	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-pull \
 	ww-import ww-features ww-train ww-evaluate
@@ -21,6 +22,13 @@ WW := uv run --project training/wake_word python training/wake_word
 TAKES ?= 1
 WW_TAKES_REMOTE := /mnt/aivi-capture/drive/aivi-wake-word/recordings/
 
+# Wall display dashboards, see docs/wall_display.md. HA_ENV is a file with
+# HA_URL and HA_TOKEN; YES=1 saves without asking.
+HA_ENV ?= .env
+WALL_DISPLAY := uv run --no-project --python 3.12 --with pyyaml==6.0.3 \
+	--with websockets==16.0 python scripts/wall_display_deploy.py
+WALL_DISPLAY_HA = $(if $(wildcard $(HA_ENV)),--env-file $(HA_ENV)) $(if $(YES),--yes)
+
 dev-up:
 	docker compose -f compose/dev/docker-compose.yml up -d
 
@@ -40,7 +48,7 @@ lint:
 	pylint --rcfile=.pylintrc services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts/*.py
 
 format:
-	black --line-length 80 services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app tests/llm_proxy tests/stt_bridge tests/stt_capture tests/wake_word_recorder training/eval training/llm training/stt training/wake_word scripts/*.py
+	black --line-length 80 services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app tests/llm_proxy tests/stt_bridge tests/stt_capture tests/wake_word_recorder tests/wall_display training/eval training/llm training/stt training/wake_word scripts/*.py
 
 test:
 	python -m compileall -q -x '/\.venv/' services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts
@@ -69,6 +77,21 @@ stt-bridge-test:
 # simulated room; needs a host C++ compiler.
 aec-tuning-test:
 	uvx --python 3.12 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/aec_tuning
+
+# Wall display dashboards: check validates the repository files offline,
+# diff compares them with Home Assistant, deploy saves the changed ones after
+# a backup of every wall display.
+wall-display-check:
+	$(WALL_DISPLAY) check
+
+wall-display-diff:
+	$(WALL_DISPLAY) diff $(WALL_DISPLAY_HA)
+
+wall-display-deploy:
+	$(WALL_DISPLAY) deploy $(WALL_DISPLAY_HA)
+
+wall-display-test:
+	uvx --python 3.12 --with pyyaml==6.0.3 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/wall_display
 
 eval:
 	python training/eval/eval_tool_call_validity.py --dataset dev/datasets/llm

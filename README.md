@@ -103,7 +103,7 @@ compose/
   dev/docker-compose.override.yml  debug capture and packet inspection
   dev/vllm.config.yaml             vLLM engine configuration for dev
   jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper, capture relay, wake word recorder)
-config/homeassistant/              Home Assistant automations, dashboards and helper templates
+config/homeassistant/              Home Assistant automations, dashboards, helpers and the bedroom alarm
 esphome/                           satellite firmware: device files, packages and local components
 services/
   llm_proxy/                       FastAPI proxy with tool-call repair
@@ -111,7 +111,7 @@ services/
   stt_capture/                     Wyoming relay that stores voice requests for STT training
   wake_word_recorder/              stores wake word training takes streamed by the satellites
   stt_faster_whisper/              custom Whisper container build
-scripts/                           model download, health checks, smoke tests
+scripts/                           model download, health checks, smoke tests, wall display deploy
 training/
   eval/                            evaluation scripts (validity, latency, compliance)
   llm/                             LoRA fine-tuning and dataset preparation
@@ -263,7 +263,7 @@ Further setup and operational guides live in the `docs/` directory:
   microWakeWord, from synthetic samples and household recordings.
 - `docs/satellite_flashing.md` is the per-room runbook for flashing a
   satellite board (XVF3800 firmware, ESP32, verification), routing its
-  answers, and the echo canceller self test.
+  answers, the echo canceller self test, and voice timers.
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
   (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
   capture of voice requests for STT training, the wake word recorder, the
@@ -271,8 +271,12 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/llm_assistant.md` covers the LLM pipeline for free speech: the
   cloud stage behind the Jetson, the Home Assistant setup, the model
   comparison and the measured latency.
-- `docs/wall_display.md` covers the living room wall display: dashboard
-  layout, display settings, Home Assistant prerequisites and deployment.
+- `docs/wall_display.md` covers the wall displays in the living room and
+  the bedroom: shared design, layout, device settings, Home Assistant
+  prerequisites and the deploy script.
+- `docs/bedroom_sunrise_alarm.md` covers the sunrise alarm on the bedroom's
+  WLED bed light: behaviour, helpers, scene, script, automation and the WLED
+  reset preset.
 
 ## Makefile helpers
 
@@ -286,6 +290,8 @@ make test             # run compileall and basic checks
 make aec-tuning-test  # echo canceller self test engine against a simulated room
 make llm-proxy-test   # llm_proxy against a fake upstream
 make stt-bridge-test  # speech-to-text bridge against a fake API and Home Assistant
+make wall-display-check   # validate the wall display dashboards offline
+make wall-display-deploy HA_ENV=<env-file>   # save changed wall displays (with backup)
 make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU
 make sat-chip DEVICE=/dev/cu.usbmodemXXXX           # identify the ESP32
 make sat-flash SAT=living-room DEVICE=<port-or-ip>   # build and flash

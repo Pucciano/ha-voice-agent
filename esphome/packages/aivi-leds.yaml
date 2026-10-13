@@ -14,11 +14,17 @@
 #               aivi-wake-word-recording.yaml)
 #   self test   a white light circles while the echo canceller self test
 #               runs (self_test_running, set by aivi-aec.yaml)
+#   alarm       the whole ring pulses amber once a second while a finished
+#               timer rings; once the gong has stopped on its own, it
+#               pulses slowly until a wake word (aivi-timers.yaml)
 #   not ready   orange blink while Wi-Fi or Home Assistant is disconnected
+#   timer       amber countdown of the timer that ends next: twelve LEDs at
+#               the start, none at the end; a paused timer breathes
 #   idle        off
 # The driver skips unchanged frames, so a steady ring costs no I2C traffic.
 #
-# Requires aivi-voice-input.yaml (voice phase globals) and aivi-xvf3800.yaml.
+# Requires aivi-voice-input.yaml (voice phase globals, va), aivi-timers.yaml
+# (timer_alarm) and aivi-xvf3800.yaml.
 
 substitutions:
   led_pulse_ms: "1200"
@@ -116,9 +122,35 @@ interval:
                 frame[i] = positive ? rgb(0, 96, 0, level) : rgb(96, 0, 0, level);
               }
             }
+          } else if (id(timer_alarm) == ${timer_alarm_ringing}) {
+            const float level = 0.5f - 0.5f * cosf((now % 1000) * 2.0f * M_PI / 1000.0f);
+            fill(rgb(160, 72, 0, level));
+          } else if (id(timer_alarm) == ${timer_alarm_silent}) {
+            const float level = 0.5f - 0.5f * cosf((now % 4000) * 2.0f * M_PI / 4000.0f);
+            fill(rgb(64, 28, 0, level));
           } else if (!id(wifi_id).is_connected() ||
                      !id(api_id).is_connected_with_state_subscription()) {
             if (now % 2000 < 300) fill(rgb(96, 40, 0, 1.0f));
+          } else {
+            // The timer that ends next; running timers before paused ones.
+            const voice_assistant::Timer *next = nullptr;
+            for (const auto &timer : id(va).get_timers()) {
+              if (timer.total_seconds == 0) continue;
+              if (next == nullptr || (timer.is_active && !next->is_active) ||
+                  (timer.is_active == next->is_active && timer.seconds_left < next->seconds_left)) {
+                next = &timer;
+              }
+            }
+            if (next != nullptr) {
+              // One LED per twelfth of the time left; the last one dims as
+              // its twelfth runs out.
+              const float lit = float(N) * next->seconds_left / next->total_seconds;
+              const float level = next->is_active ? 1.0f : 0.6f + 0.4f * cosf((now % 3000) * 2.0f * M_PI / 3000.0f);
+              for (int i = 0; i < N; i++) {
+                const float part = std::min(1.0f, lit - i);
+                if (part > 0.0f) frame[i] = rgb(40, 18, 0, part * level);
+              }
+            }
           }
           id(respeaker).set_led_ring(frame);
 

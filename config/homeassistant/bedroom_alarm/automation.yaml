@@ -1,0 +1,74 @@
+# Home Assistant automation: the bedroom sunrise alarm (issue #24). It is
+# deployed through the automation config API; keep this copy and Home
+# Assistant in sync.
+#
+# The alarm time (input_datetime.bedroom_alarm_time) is the time the bed
+# light is fully bright, so the sunrise starts its duration
+# (input_number.bedroom_alarm_sunrise_minutes) earlier, possibly on the
+# evening before. Weekday and workday are those of the alarm time.
+#
+# The alarm runs when
+# - it is on (input_boolean.bedroom_alarm_enabled),
+# - the weekday of the alarm is selected (input_boolean.bedroom_alarm_mon
+#   to _sun),
+# - with "nur an Arbeitstagen" (input_boolean.bedroom_alarm_workdays_only),
+#   the day of the alarm is a workday of the Workday integration
+#   (binary_sensor.arbeitstag, which excludes weekends and public holidays),
+# - someone is home,
+# - the bed light is off (otherwise someone is awake already).
+#
+# The sunrise itself, the daylight and the hand-over to the remote are in
+# script.bedroom_sunrise (script.yaml). It is started without waiting, so a
+# preview from the display and this automation share one run.
+#
+# The template trigger is rendered again at the start of every minute,
+# because it uses now(), and becomes true in the minute the sunrise starts.
+id: bedroom_sunrise_alarm
+alias: Lichtwecker Schlafzimmer
+description: Startet den Sonnenaufgang auf dem Bettlicht so, dass es zur Weckzeit voll hell ist.
+mode: single
+triggers:
+  - trigger: template
+    value_template: >-
+      {%- set minutes = states('input_number.bedroom_alarm_sunrise_minutes') | int(60) -%}
+      {{ (now() + timedelta(minutes=minutes)).strftime('%H:%M')
+         == states('input_datetime.bedroom_alarm_time')[:5] }}
+variables:
+  minutes: "{{ states('input_number.bedroom_alarm_sunrise_minutes') | int(60) }}"
+  alarm: "{{ (now() + timedelta(minutes=minutes)).isoformat() }}"
+  weekday: "{{ ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][as_datetime(alarm).weekday()] }}"
+conditions:
+  - alias: Alarm on
+    condition: state
+    entity_id: input_boolean.bedroom_alarm_enabled
+    state: "on"
+  - alias: Weekday of the alarm selected
+    condition: template
+    value_template: "{{ is_state('input_boolean.bedroom_alarm_' ~ weekday, 'on') }}"
+  - alias: Someone home
+    condition: numeric_state
+    entity_id: zone.home
+    above: 0
+  - alias: Bed light off
+    condition: state
+    entity_id: light.bedroom_bed_wled
+    state: "off"
+actions:
+  - action: workday.check_date
+    target:
+      entity_id: binary_sensor.arbeitstag
+    data:
+      check_date: "{{ as_datetime(alarm).date() }}"
+    response_variable: workday
+  - alias: Day of the alarm is a workday, or every selected weekday counts
+    condition: template
+    value_template: >-
+      {{ is_state('input_boolean.bedroom_alarm_workdays_only', 'off')
+         or workday['binary_sensor.arbeitstag'].workday }}
+  - action: script.turn_on
+    target:
+      entity_id: script.bedroom_sunrise
+    data:
+      variables:
+        minutes: "{{ minutes }}"
+        hold_minutes: 60

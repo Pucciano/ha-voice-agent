@@ -28,9 +28,13 @@
 # Media ducks by 20 dB during announcements and while the assistant runs. A
 # new wake word stops an answer that still plays.
 #
-# Requires aivi-voice-input.yaml (audio_on_jack, voice assistant) and
-# aivi-xvf3800.yaml (i2s_speaker), and the substitution room_speaker: the
-# Home Assistant name of the room speaker, e.g. Wohnzimmerlautsprecher.
+# Sounds built into the firmware play as announcements with
+# audio-file://<id>: timer_finished, the gong of aivi-timers.yaml.
+#
+# Requires aivi-voice-input.yaml (audio_on_jack, voice assistant),
+# aivi-timers.yaml (timer_alarm) and aivi-xvf3800.yaml (i2s_speaker), and the
+# substitution room_speaker: the Home Assistant name of the room speaker,
+# e.g. Wohnzimmerlautsprecher.
 
 substitutions:
   jack_option: Klinke
@@ -67,10 +71,16 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
 
+audio_file:
+  - id: timer_finished
+    file: sounds/timer_finished.wav
+
 media_source:
   - platform: audio_http
     id: announcement_http_source
     buffer_size: 250000
+  - platform: audio_file
+    id: sound_file_source
   - platform: audio_http
     id: media_http_source
     buffer_size: 500000
@@ -93,6 +103,7 @@ media_player:
       speaker: announcement_resampling_speaker
       sources:
         - announcement_http_source
+        - sound_file_source
     media_pipeline:
       format: FLAC
       num_channels: 2
@@ -110,6 +121,7 @@ media_player:
     on_announcement:
       - script.execute: duck_media
     on_state:
+      # Between two gongs of a timer alarm the media stays ducked.
       - if:
           condition:
             and:
@@ -117,6 +129,7 @@ media_player:
                   media_player.is_announcing: aivi_player
               - not:
                   voice_assistant.is_running:
+              - lambda: return id(timer_alarm) != ${timer_alarm_ringing};
           then:
             - script.execute: unduck_media
 

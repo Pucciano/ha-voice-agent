@@ -86,6 +86,11 @@ to its analog input when it starts.
 Music that the speaker plays on its own (Spotify Connect, BluOS presets)
 bypasses the satellite and stays outside the echo reference.
 
+Timer alarms always take the jack, whatever `Audioausgabe` says: the gong and
+the spoken "Der Timer … ist abgelaufen" play on `Audioausgang`, so a finished
+timer also switches a speaker that plays network answers to its analog input
+(`docs/satellite_flashing.md`, section 8).
+
 ## Volume and zone configuration
 
 Volume can be controlled through the Home Assistant media_player interface,

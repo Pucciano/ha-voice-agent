@@ -15,8 +15,9 @@ the device and starts the Home Assistant pipeline `AIVI Lokal Deutsch`. The
 answer plays on the room's speaker: Home Assistant streams it there over the
 network, or the satellite plays it itself through its 3.5 mm jack into the
 speaker's analog input, which gives the XVF3800 an echo reference
-([step 6](#6-route-answers-to-the-room-speaker)). The flashing steps stay the
-same when later phases add packages.
+([step 6](#6-route-answers-to-the-room-speaker)). Voice timers ring on the
+satellite ([step 8](#8-voice-timers)). The flashing steps stay the same when
+later phases add packages.
 
 ## Prerequisites
 
@@ -158,6 +159,10 @@ appear in the default log. Read them in Home Assistant or with any API client.
 | Circling green light | Wake word take running: "Hey AIVI" again and again |
 | Circling red light | Wake word take running: everyday sound |
 | Circling white light | Echo canceller self test running |
+| Pulsing amber, once a second | A timer has finished and its alarm rings |
+| Pulsing amber, every 4 seconds | Alarm not stopped; its gong ended after 2 minutes |
+| Amber, shrinking | A timer runs; the lit LEDs show the time left of the timer that ends next |
+| Amber, breathing | The timer that ends next is paused |
 | Off | Ready, listening for the wake word |
 
 The satellite refuses follow-up questions (`continue_conversation`): every
@@ -366,7 +371,78 @@ Bluesound's 50 ms, about 40 ms of the 192 ms filter carry no echo, so it
 covers only about 150 ms of the room's decay. `Selbsttest Ergebnis` says how
 many dB of the decay that is.
 
-### 8. Later updates
+### 8. Voice timers
+
+Home Assistant runs voice timers only for a device that announces timer
+support, and the firmware announces it (`esphome/packages/aivi-timers.yaml`).
+Home Assistant then offers the timer intents to the satellite: the built-in
+agent understands "Stelle einen Timer auf zwei Minuten", "Wie lange läuft der
+Timer noch?" or "Brich den Timer ab", and an LLM agent gets the timer tools
+(`HassStartTimer`, `HassCancelTimer`, `HassTimerStatus` and others). Without
+it Home Assistant answers "Timer werden auf diesem Gerät nicht unterstützt".
+Home Assistant keeps the timers; the satellite gets every start, change,
+cancellation and end, and counts down in between.
+
+- While a timer runs, the LED ring counts it down in amber: twelve LEDs at
+  the start, one fewer every twelfth of the time, and the last LED dims as
+  its twelfth runs out. With several timers it shows the one that ends next.
+  The ring's other states take precedence.
+- When a timer ends, the satellite plays a gong on `Audioausgang`, then Home
+  Assistant says which timer has ended ("Der Timer über 2 Minuten ist
+  abgelaufen.", with the name if the timer has one), then the gong repeats
+  every 3 seconds. The ring pulses amber.
+- The wake word stops the alarm and starts no command; say it again for a
+  command. If nobody stops it, the gong ends after 2 minutes and the ring
+  pulses slowly until the next wake word. With the microphone muted, the
+  wake word cannot stop it.
+- The alarm waits until a running command, its answer, a self test or a wake
+  word take has ended (at most 60 seconds). Music on `Audioausgang` stays
+  ducked while the gong repeats.
+
+Gong and announcement always play through the jack, whatever `Audioausgabe`
+says: `AIVI Klinkenausgang` switches the room speaker to its analog input as
+soon as `Audioausgang` starts. They are in the echo reference, so the wake
+word is heard over them. A speaker that `AIVI Klinkenausgang freigeben` has
+stopped plays the input about 1.2 seconds late, so the start of the first
+gong can be missing. The gong is `esphome/sounds/timer_finished.wav`, three
+rising bell notes made by `scripts/generate_timer_sound.py`; run the script
+again after changing it.
+
+Home Assistant receives `esphome.aivi_timer` with the `satellite_id` and a
+`phase`: `finished` after the first gong (with `name` and `total_seconds`),
+`silenced` when the gong ended on its own, `stopped` when a wake word ended
+the alarm.
+
+Set it up:
+
+1. Add the room to `config/homeassistant/aivi_timer_announcement.yaml`
+   (`AIVI Timer-Ansage`): an entry under `rooms` with the satellite's device
+   id and its `Audioausgang` media player. `tts_engine`, `tts_language` and
+   `tts_voice` are the text-to-speech settings of the satellite's pipelines.
+   Update the automation in Home Assistant with the file content.
+2. Flash the firmware ([step 9](#9-later-updates)). Home Assistant takes the
+   timer support over when the satellite reconnects (the living room
+   satellite needed no reload). If it still answers "Timer werden auf diesem
+   Gerät nicht unterstützt", reload the satellite's ESPHome integration.
+
+Test it:
+
+- "Stelle einen Timer auf eine Minute": Home Assistant confirms, and the
+  ring shows twelve amber LEDs, one fewer every 5 seconds.
+- "Wie lange läuft der Timer noch?": the answer gives the time left; the ring
+  goes back to the countdown afterwards.
+- "Brich den Timer ab": the countdown disappears.
+- "Stelle einen Timer auf zehn Sekunden" and wait: gong, "Der Timer über
+  10 Sekunden ist abgelaufen.", then the gong every 3 seconds and the ring
+  pulsing. Home Assistant receives `esphome.aivi_timer` with
+  `phase: finished`. Say the wake word: the alarm stops (`phase: stopped`),
+  and no command starts.
+- Let a timer ring out: after 2 minutes the gong stops (`phase: silenced`),
+  and the ring pulses slowly until the next wake word.
+- With the pipeline `AIVI Cloud`, the same sentences reach the LLM, and its
+  request lists the tool `intent__HassStartTimer`.
+
+### 9. Later updates
 
 Updates go over the network with encrypted OTA:
 
@@ -374,7 +450,7 @@ Updates go over the network with encrypted OTA:
 make sat-flash SAT=<room> DEVICE=<ip-address>
 ```
 
-### 9. Replace a board
+### 10. Replace a board
 
 A replacement board for a room keeps the room's device file and API key, so
 Home Assistant keeps the device, its entities and the router entry:

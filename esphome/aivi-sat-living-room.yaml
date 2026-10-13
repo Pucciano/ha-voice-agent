@@ -2,8 +2,8 @@
 #
 # Phase 5 firmware: on-device wake word starts the Home Assistant voice
 # pipeline; the answer plays on the room speaker, over the network or through
-# the jack into its analog input. Build and flash with
-# `make sat-flash SAT=living-room`.
+# the jack into its analog input. Voice timers ring through the jack. Build
+# and flash with `make sat-flash SAT=living-room`.
 
 substitutions:
   name: aivi-sat-living-room
@@ -17,6 +17,7 @@ packages:
   xvf3800: !include packages/aivi-xvf3800.yaml
   voice_input: !include packages/aivi-voice-input.yaml
   audio_output: !include packages/aivi-audio-output.yaml
+  timers: !include packages/aivi-timers.yaml
   aec: !include packages/aivi-aec.yaml
   leds: !include packages/aivi-leds.yaml
   diagnostics: !include packages/aivi-diagnostics.yaml

@@ -1,0 +1,67 @@
+# Home Assistant automation: say which timer of an AIVI satellite has
+# finished (issue #19). It is deployed through the automation config API;
+# keep this copy and Home Assistant in sync.
+#
+# The satellite rings a finished timer itself (esphome/packages/
+# aivi-timers.yaml): after the first gong it sends esphome.aivi_timer with
+# phase finished, the timer's name (empty unless one was given) and its
+# total_seconds, and waits up to 10 s for this announcement before the gong
+# goes on. The announcement plays on the satellite's media player
+# "Audioausgang", so through the jack like the gong: "AIVI Klinkenausgang"
+# switches the room speaker to its analog input when the player starts, and
+# the echo canceller hears it in its reference.
+#
+#   "Der Timer über 2 Minuten ist abgelaufen."
+#   "Der Timer Pizza über 10 Minuten ist abgelaufen."
+#
+# Only listed rooms, and events only from the satellite's own device. The
+# voice is the one of the satellite's pipelines.
+id: aivi_timer_announcement
+alias: AIVI Timer-Ansage
+description: Sagt auf dem AIVI-Satelliten an, welcher Timer abgelaufen ist.
+mode: queued
+max: 10
+triggers:
+  - trigger: event
+    event_type: esphome.aivi_timer
+    event_data:
+      phase: finished
+variables:
+  # satellite_id -> Home Assistant device of the satellite and its media
+  # player
+  rooms:
+    living_room:
+      device_id: 9d60b29d2391e4609bfceb502da83836
+      player: media_player.wohnung_wohnzimmer_aivi_satellit_audioausgang
+  tts_engine: tts.piper_2
+  tts_language: de_DE
+  tts_voice: de_DE-thorsten-medium
+  room: "{{ rooms.get(trigger.event.data.satellite_id | default(''), {}) }}"
+  message: >-
+    {%- set total = trigger.event.data.total_seconds | default(0) | int(0) -%}
+    {%- set units = [
+          (total // 3600, 'eine Stunde', 'Stunden'),
+          (total % 3600 // 60, 'eine Minute', 'Minuten'),
+          (total % 60, 'eine Sekunde', 'Sekunden')] -%}
+    {%- set ns = namespace(parts=[]) -%}
+    {%- for count, one, many in units if count > 0 -%}
+      {%- set ns.parts = ns.parts + [one if count == 1 else count ~ ' ' ~ many] -%}
+    {%- endfor -%}
+    {%- set duration = (ns.parts[:-1] | join(', ') ~ ' und ' ~ ns.parts[-1])
+          if ns.parts | length > 1 else ns.parts | join('') -%}
+    {%- set name = trigger.event.data.name | default('') | trim -%}
+    Der Timer{{ ' ' ~ name if name }}{{ ' über ' ~ duration if duration }} ist abgelaufen.
+conditions:
+  - alias: Known satellite, sent by its own device
+    condition: template
+    value_template: "{{ room.player is defined and trigger.event.data.device_id | default('') == room.device_id }}"
+actions:
+  - action: tts.speak
+    target:
+      entity_id: "{{ tts_engine }}"
+    data:
+      media_player_entity_id: "{{ room.player }}"
+      message: "{{ message }}"
+      language: "{{ tts_language }}"
+      options:
+        voice: "{{ tts_voice }}"
