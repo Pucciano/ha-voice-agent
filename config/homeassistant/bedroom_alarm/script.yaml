@@ -1,0 +1,132 @@
+# Home Assistant script: the sunrise of the bedroom sunrise alarm
+# (issue #24). The automation "Lichtwecker Schlafzimmer" (automation.yaml)
+# runs it, and the bedroom wall display runs it as a preview. It is deployed
+# through the script config API as script.bedroom_sunrise; keep this copy
+# and Home Assistant in sync.
+#
+# 1. Sunrise: the WLED effect speed becomes the duration in minutes, then
+#    the scene "Schlafzimmer Sunrise" (scene.yaml) starts the Sunrise effect.
+# 2. Daylight: after the duration the strip fades to the bed light of the
+#    scene "Schlafzimmer Day" (solid, white channel only). The effect alone
+#    would end with dark edges.
+# 3. After `hold_minutes` of daylight the light fades out.
+#
+# Someone who is awake takes over:
+# - Light off during the sunrise (RODRET, voice, app, "Stopp" on the
+#   display): the WLED preset "Bedroom Bed Alarm Reset"
+#   (wled_reset_preset.json) sets the effect back to solid while the light
+#   stays off. Otherwise the next "on" would show what is left of the
+#   sunrise. The colour from before the alarm stays; the brightness is 255.
+# - Any other RODRET button during the sunrise: daylight at once, and the
+#   light stays on until someone turns it off.
+# - Any RODRET button or light off during daylight: the script ends and the
+#   light stays as it is.
+#
+# Entity ids in triggers cannot be templates, so the bed light and the
+# remote's topic are written out there.
+alias: Lichtwecker Sonnenaufgang
+description: Lässt das Bettlicht wie einen Sonnenaufgang hell werden, hält das Tageslicht und schaltet es danach aus.
+icon: mdi:weather-sunset-up
+mode: restart
+fields:
+  minutes:
+    name: Dauer
+    description: Dauer des Sonnenaufgangs in Minuten (1–60).
+    default: 60
+    selector:
+      number:
+        min: 1
+        max: 60
+        unit_of_measurement: min
+  hold_minutes:
+    name: Tageslicht
+    description: Minuten Tageslicht, bevor das Licht ausgeht.
+    default: 60
+    selector:
+      number:
+        min: 1
+        max: 240
+        unit_of_measurement: min
+variables:
+  # WLED's Sunrise effect reads its duration from the speed, 1 to 60.
+  sunrise_minutes: "{{ [[minutes | default(60) | int(60), 1] | max, 60] | min }}"
+  daylight_minutes: "{{ [hold_minutes | default(60) | int(60), 1] | max }}"
+sequence:
+  - action: number.set_value
+    target:
+      entity_id: number.wled_geschwindigkeit
+    data:
+      value: "{{ sunrise_minutes }}"
+  - action: scene.turn_on
+    target:
+      entity_id: scene.bedroom_sunrise
+  - alias: Wait for the sunrise, a button of the remote or the light off
+    wait_for_trigger:
+      - trigger: state
+        entity_id: light.bedroom_bed_wled
+        from: "on"
+        to: "off"
+        id: light_off
+      # An empty action is no button press.
+      - trigger: mqtt
+        topic: zigbee2mqtt/bed_room_dimmer_1/action
+        value_template: "{{ value | length > 0 }}"
+        payload: "True"
+        id: remote
+    timeout:
+      minutes: "{{ sunrise_minutes }}"
+    continue_on_timeout: true
+  - variables:
+      # done: the sunrise ran to its end; off: someone turned the light off;
+      # awake: someone pressed another button of the remote.
+      outcome: >-
+        {%- set t = wait.trigger -%}
+        {%- if t is none -%}done
+        {%- elif t.id == 'light_off' or t.payload == 'off' -%}off
+        {%- else -%}awake
+        {%- endif -%}
+  - if:
+      - condition: template
+        value_template: "{{ outcome == 'off' }}"
+    then:
+      - action: select.select_option
+        target:
+          entity_id: select.bedroom_bed_wled_preset
+        data:
+          option: Bedroom Bed Alarm Reset
+      - stop: Light turned off during the sunrise
+  # No brightness: the scene set 255, and a dimmed light stays dimmed.
+  - action: light.turn_on
+    target:
+      entity_id: light.bedroom_bed_wled
+    data:
+      effect: Solid
+      rgbw_color: [0, 0, 0, 255]
+      transition: "{{ 10 if outcome == 'done' else 1 }}"
+  - if:
+      - condition: template
+        value_template: "{{ outcome == 'awake' }}"
+    then:
+      - stop: Someone took over with the remote
+  - alias: Wait for the end of daylight, a button of the remote or the light off
+    wait_for_trigger:
+      - trigger: state
+        entity_id: light.bedroom_bed_wled
+        from: "on"
+        to: "off"
+      - trigger: mqtt
+        topic: zigbee2mqtt/bed_room_dimmer_1/action
+        value_template: "{{ value | length > 0 }}"
+        payload: "True"
+    timeout:
+      minutes: "{{ daylight_minutes }}"
+    continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ wait.trigger is none }}"
+    then:
+      - action: light.turn_off
+        target:
+          entity_id: light.bedroom_bed_wled
+        data:
+          transition: 10
