@@ -1383,3 +1383,267 @@ button_card_templates:
         - font-size: 12px
         - line-height: 16px
         - color: var(--wd-muted)
+
+  # ----------------------------------------------------------------- alarm --
+  # The sunrise alarm (docs/bedroom_sunrise_alarm.md). The room file passes
+  # the helpers: the card's entity is the alarm time; the variables name the
+  # rest (see wd_alarm). The switch sits in the section heading.
+  wd_alarm_switch:
+    template: wd_base
+    show_name: true
+    show_icon: true
+    variables:
+      is_on: "[[[ return entity?.state === 'on'; ]]]"
+    name: "[[[ return variables.is_on ? 'Aktiv' : 'Aus'; ]]]"
+    icon: "[[[ return variables.is_on ? 'mdi:alarm-check' : 'mdi:alarm-off'; ]]]"
+    tap_action:
+      action: toggle
+    styles:
+      card:
+        - height: 36px
+        - padding: 0 14px 0 10px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - cursor: pointer
+        - background: "[[[ return variables.is_on ? 'var(--wd-ok-bg)' : 'transparent'; ]]]"
+        - border: "[[[ return variables.is_on ? '1px solid transparent' : '1px solid var(--wd-line-strong)'; ]]]"
+      grid:
+        - grid-template-areas: '"i n"'
+        - grid-template-columns: 16px auto
+        - column-gap: 6px
+      icon:
+        - width: 16px
+        - color: "[[[ return variables.is_on ? 'var(--wd-ok-ink)' : 'var(--wd-muted)'; ]]]"
+      name:
+        - font-size: 13px
+        - font-weight: 700
+        - white-space: nowrap
+        - color: "[[[ return variables.is_on ? 'var(--wd-ok-ink)' : 'var(--wd-ink)'; ]]]"
+
+  # Variables from the room file:
+  #   enabled           input_boolean, alarm on or off
+  #   duration          input_number, minutes of the sunrise
+  #   workdays_only     input_boolean, only on workdays
+  #   days              seven input_booleans, Monday to Sunday
+  #   script            the sunrise script (preview, running state)
+  #   light             the light of the sunrise (stop, phase)
+  #   workday_sensor    Workday binary sensor (its weekdays)
+  #   workday_calendar  Workday calendar (its workdays, with holidays)
+  wd_alarm:
+    template: wd_base
+    variables:
+      labels: [Mo, Di, Mi, Do, Fr, Sa, So]
+      keys: [mon, tue, wed, thu, fri, sat, sun]
+      # Workdays of the next 15 days from the Workday calendar, which leaves
+      # out public holidays. Loaded once per page and calendar, again after
+      # an hour.
+      load_workdays:
+        force_eval: true
+        value: |
+          [[[
+            window.wdAlarmCard = this;
+            window.wdWorkdays = window.wdWorkdays || {};
+            const cal = variables.workday_calendar;
+            const cache = window.wdWorkdays[cal];
+            if (cal && hass.callApi && !cache?.loading && (!cache || Date.now() - cache.at > 3600000)) {
+              window.wdWorkdays[cal] = { ...cache, loading: true };
+              const start = new Date();
+              start.setHours(0, 0, 0, 0);
+              const end = new Date(start.getTime() + 15 * 86400000);
+              const query = `start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
+              hass.callApi('GET', `calendars/${cal}?${query}`).then((events) => {
+                const dates = new Set(events.map((e) => e.start.date || (e.start.dateTime || '').slice(0, 10)));
+                window.wdWorkdays[cal] = { at: Date.now(), dates };
+              }).catch(() => {
+                window.wdWorkdays[cal] = { at: Date.now(), failed: true };
+              }).finally(() => window.wdAlarmCard?.requestUpdate?.('_config'));
+            }
+          ]]]
+      is_on: "[[[ return (id) => states[id]?.state === 'on'; ]]]"
+      alarm_time: "[[[ return (entity?.state || '').slice(0, 5); ]]]"
+      minutes: |
+        [[[
+          const n = parseInt(states[variables.duration]?.state, 10);
+          return isNaN(n) ? 60 : n;
+        ]]]
+      # "HH:MM" of a date.
+      hhmm: |
+        [[[
+          const pad = (n) => String(n).padStart(2, '0');
+          return (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        ]]]
+      # The next alarm: { date, start } or { text } when there is none. The
+      # weekday and workday are those of the alarm time, as in the
+      # automation.
+      next_alarm: |
+        [[[
+          states['sensor.time'];
+          if (!variables.is_on(variables.enabled)) return { text: 'Wecker aus' };
+          const [h, m] = variables.alarm_time.split(':').map(Number);
+          if (isNaN(h) || isNaN(m)) return { text: 'Keine Weckzeit' };
+          const only = variables.is_on(variables.workdays_only);
+          const cache = (window.wdWorkdays || {})[variables.workday_calendar];
+          if (only && !cache?.dates) {
+            return { text: cache?.failed ? 'Arbeitstage nicht abrufbar' : 'Arbeitstage werden geladen …' };
+          }
+          const pad = (n) => String(n).padStart(2, '0');
+          const now = new Date();
+          for (let i = 0; i < 15; i++) {
+            const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h, m);
+            const start = new Date(date.getTime() - variables.minutes * 60000);
+            if (start <= now) continue;
+            if (!variables.is_on(variables.days[(date.getDay() + 6) % 7])) continue;
+            const iso = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+            if (only && !cache.dates.has(iso)) continue;
+            return { date, start };
+          }
+          return { text: 'Kein Wecker in den nächsten zwei Wochen' };
+        ]]]
+    extra_styles: |
+      button { outline: none; }
+      button:focus-visible { outline: 2px solid var(--wd-line-strong); outline-offset: 2px; border-radius: 18px; }
+    styles:
+      card:
+        - padding: 14px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+      grid:
+        - grid-template-areas: '"body"'
+        - grid-template-columns: minmax(0, 1fr)
+        - grid-template-rows: auto
+      # A button-card without actions and child cards is disabled, with
+      # pointer-events none; the buttons of the body need them back.
+      custom_fields:
+        body:
+          - justify-self: stretch
+          - text-align: left
+          - pointer-events: auto
+    custom_fields:
+      body: |
+        [[[
+          const run = (action) => helpers.runAction(action);
+          const perform = (service, id, data) => run({
+            action: 'perform-action', perform_action: service, target: { entity_id: id }, ...(data ? { data } : {}),
+          });
+          const btn = 'border:none;background:none;font:inherit;color:inherit;padding:0;margin:0;cursor:pointer;'
+            + '-webkit-tap-highlight-color:transparent;box-sizing:border-box;';
+          const chip = (active) => `${btn}height:36px;border-radius:18px;font-size:13px;font-weight:700;`
+            + `display:flex;align-items:center;justify-content:center;white-space:nowrap;`
+            + (active ? 'background:var(--wd-accent-bg);border:1px solid transparent;color:var(--wd-ink);'
+              : 'border:1px solid var(--wd-line-strong);color:var(--wd-muted);');
+          const round = `${btn}width:40px;height:40px;border-radius:20px;border:1px solid var(--wd-line-strong);`
+            + 'display:flex;align-items:center;justify-content:center;color:var(--wd-ink);';
+          const line = html`<div style="height:1px;background:var(--wd-line)"></div>`;
+
+          // Alarm time, moved in steps of five minutes.
+          const time = variables.alarm_time;
+          const shift = (delta) => {
+            const [h, m] = (time || '06:30').split(':').map(Number);
+            const t = (((h * 60 + m + delta) % 1440) + 1440) % 1440;
+            const pad = (n) => String(n).padStart(2, '0');
+            perform('input_datetime.set_datetime', entity.entity_id, { time: `${pad(Math.floor(t / 60))}:${pad(t % 60)}:00` });
+          };
+          const startText = (() => {
+            const [h, m] = (time || '').split(':').map(Number);
+            if (isNaN(h) || isNaN(m)) return '';
+            const d = new Date(2000, 0, 1, h, m - variables.minutes);
+            return `Sonnenaufgang ab ${variables.hhmm(d)} · ${variables.minutes} min`;
+          })();
+
+          // Weekdays; with "only on workdays", days that are never workdays
+          // are dimmed.
+          const only = variables.is_on(variables.workdays_only);
+          const workdays = states[variables.workday_sensor]?.attributes?.workdays || variables.keys;
+          const days = variables.days.map((id, i) => {
+            const active = variables.is_on(id);
+            const dim = only && !workdays.includes(variables.keys[i]);
+            return html`<button style="${chip(active)}flex:1;min-width:0;opacity:${dim ? 0.45 : 1}"
+              aria-pressed="${active}" aria-label="${variables.labels[i]}"
+              @click=${() => perform('input_boolean.toggle', id)}>${variables.labels[i]}</button>`;
+          });
+
+          const durations = [15, 30, 45, 60].map((v) => html`<button style="${chip(variables.minutes === v)}padding:0 12px"
+            @click=${() => perform('input_number.set_value', variables.duration, { value: v })}>${v} min</button>`);
+
+          const switchOn = only;
+          const toggleSwitch = html`<button role="switch" aria-checked="${switchOn}" aria-label="Nur an Arbeitstagen"
+            style="${btn}position:relative;flex:none;width:48px;height:28px;border-radius:14px;
+              background:${switchOn ? '#A86F43' : 'var(--wd-track)'}"
+            @click=${() => perform('input_boolean.toggle', variables.workdays_only)}>
+            <span style="position:absolute;top:3px;left:${switchOn ? 23 : 3}px;width:22px;height:22px;border-radius:11px;
+              background:${switchOn ? '#FFFFFF' : 'var(--wd-card)'};box-shadow:0 1px 3px rgba(0,0,0,0.25)"></span></button>`;
+
+          // Footer: the next alarm, or the running sunrise with a stop button.
+          const running = variables.is_on(variables.script);
+          let status;
+          if (running) {
+            const sunrise = states[variables.light]?.attributes?.effect === 'Sunrise';
+            status = sunrise
+              ? { label: 'Sonnenaufgang läuft', value: 'Danach Tageslicht' }
+              : { label: 'Tageslicht', value: 'Geht danach automatisch aus' };
+          } else {
+            const next = variables.next_alarm;
+            if (next.date) {
+              const now = new Date();
+              const offset = Math.round((new Date(next.date.getFullYear(), next.date.getMonth(), next.date.getDate())
+                - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+              const day = offset === 0 ? 'Heute' : offset === 1 ? 'Morgen'
+                : `${next.date.toLocaleDateString('de-DE', { weekday: 'short' }).replace('.', '')}, `
+                  + `${next.date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}`;
+              status = { label: 'Nächster Wecker', value: `${day} · ${variables.hhmm(next.date)}` };
+            } else {
+              status = { label: 'Nächster Wecker', value: next.text };
+            }
+          }
+          const action = running
+            ? html`<button style="${btn}height:36px;padding:0 14px;border-radius:18px;background:var(--wd-play-bg);
+                color:var(--wd-play-fg);display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700"
+                @click=${() => perform('light.turn_off', variables.light)}>
+                <ha-icon icon="mdi:stop" style="--mdc-icon-size:16px;display:flex"></ha-icon>Stopp</button>`
+            : html`<button style="${btn}height:36px;padding:0 14px;border-radius:18px;border:1px solid var(--wd-line-strong);
+                display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--wd-ink)"
+                @click=${() => run({
+                  action: 'perform-action', perform_action: 'script.turn_on', target: { entity_id: variables.script },
+                  data: { variables: { minutes: 1, hold_minutes: 1 } },
+                  confirmation: { text: 'Vorschau: Das Bettlicht geht jetzt eine Minute lang auf, bleibt eine Minute hell und geht dann aus.' },
+                })}>
+                <ha-icon icon="mdi:play-outline" style="--mdc-icon-size:16px;display:flex"></ha-icon>Vorschau</button>`;
+
+          return html`<div style="display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <button style="${btn}display:flex;flex-direction:column;align-items:flex-start;flex:1;min-width:0;text-align:left"
+                aria-label="Weckzeit ändern" @click=${() => run({ action: 'more-info', entity: entity.entity_id })}>
+                <span style="font-family:var(--wd-display);font-size:52px;line-height:56px;letter-spacing:-0.02em;
+                  font-variant-numeric:tabular-nums">${time || '–'}</span>
+                <span style="font-size:13px;line-height:17px;color:var(--wd-muted)">${startText}</span>
+              </button>
+              <button style="${round}" aria-label="5 Minuten früher" @click=${() => shift(-5)}>
+                <ha-icon icon="mdi:minus" style="--mdc-icon-size:20px;display:flex"></ha-icon></button>
+              <button style="${round}" aria-label="5 Minuten später" @click=${() => shift(5)}>
+                <ha-icon icon="mdi:plus" style="--mdc-icon-size:20px;display:flex"></ha-icon></button>
+            </div>
+            <div style="display:flex;gap:6px">${days}</div>
+            ${line}
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-size:14px;font-weight:700;flex:1;min-width:60px">Dauer</span>
+              <div style="display:flex;gap:6px">${durations}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
+                <span style="font-size:14px;line-height:18px;font-weight:700">Nur an Arbeitstagen</span>
+                <span style="font-size:12px;line-height:16px;color:var(--wd-muted)">Ohne Wochenende und Feiertage</span>
+              </div>
+              ${toggleSwitch}
+            </div>
+            ${line}
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
+                <span style="font-size:12px;line-height:16px;color:var(--wd-muted)">${status.label}</span>
+                <span style="font-size:15px;line-height:19px;font-weight:800">${status.value}</span>
+              </div>
+              ${action}
+            </div>
+          </div>`;
+        ]]]
