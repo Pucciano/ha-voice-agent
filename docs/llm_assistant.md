@@ -140,8 +140,11 @@ For comparison, Speech-to-Phrase needs about 1 s and Whisper on the Nano 5 to
 
 ## Known limits
 
-- **Timers:** the satellite does not announce timer support, so Home
-  Assistant answers "Timer werden auf diesem Gerät nicht unterstützt".
+- **Timers:** they work, since the satellite announces timer support
+  ([satellite runbook, step 8](satellite_flashing.md#8-voice-timers)). A
+  misheard sentence can still name a timer wrongly: Voxtral once wrote "Ich
+  stelle einen Timer auf eine Minute", and Home Assistant's built-in sentence
+  took "Ich stelle einen" as the timer's name.
 - **Follow-up questions:** when the agent asks back ("Soll ich ihn
   ausschalten?"), the answer needs the wake word again, because the satellite
   does not continue the conversation.
