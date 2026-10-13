@@ -157,6 +157,18 @@ def test_capture_writes_a_complete_sample(tmp_path) -> None:
     asyncio.run(run())
 
 
+def test_label_source_is_unknown_before_the_upstream_info(tmp_path) -> None:
+    async def run() -> None:
+        async with harness(tmp_path) as h:
+            await request(h, tone(0.5))
+            [sample] = samples(h.store)
+            meta = metadata(sample)
+            assert meta["label_source"] == "unknown"
+            assert meta["stt"] is None
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     ("upstream", "outcome", "transcript"),
     [

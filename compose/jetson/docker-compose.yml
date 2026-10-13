@@ -1,10 +1,17 @@
 name: aivi-jetson
 
-# Speech services for Home Assistant on the Jetson Nano (plan phase 4). All
-# of them run on the CPU:
+# Speech services for Home Assistant on the Jetson Nano (plan phase 4) and the
+# LLM assistant's gateways (issue #18). All of them run on the CPU:
 #   stt-capture       Wyoming port 10300 for speech to text: relays every
 #                     request byte for byte to speech-to-phrase and captures
 #                     it when the satellite's switch allows (issue #10)
+#   stt-capture-cloud Wyoming port 10310: the same relay in front of
+#                     stt-bridge, for the LLM pipeline
+#   stt-bridge        speech to text through a cloud transcription API, only
+#                     inside this compose network
+#   llm-proxy         OpenAI-compatible port 18001 for Home Assistant's
+#                     llama.cpp integration; forwards to the cloud model and
+#                     captures every exchange on the drive
 #   wake-word-recorder  port 10800: stores the wake word training takes that
 #                     the satellites stream when started in Home Assistant
 #                     (issue #13)
@@ -14,23 +21,23 @@ name: aivi-jetson
 #                     started with --profile compare
 #
 # Models are downloaded once into /srv/wyoming and then used offline. The
-# stt-capture and wake-word-recorder images are built on the Jetson from
-# services/stt_capture and services/wake_word_recorder; see
-# docs/jetson_setup.md, sections 9 and 10.
+# aivi/* images are built on the Jetson from services/; see
+# docs/jetson_setup.md, sections 9 to 12.
 #
 # Logging follows the Docker daemon default, which aivi-logmode switches
 # between prod (nothing kept) and dev. Do not add per-service logging here.
 #
 # The .env file next to this one (root:docker, 0640, never committed) sets
-# HASS_WEBSOCKET_URI, HASS_TOKEN and WAKE_WORD_RECORDER_TOKEN; see
-# docs/jetson_setup.md.
+# HASS_WEBSOCKET_URI, HASS_TOKEN, WAKE_WORD_RECORDER_TOKEN, MISTRAL_API_KEY
+# and LLM_PROXY_API_KEY; see docs/jetson_setup.md. A missing key only
+# disables the service that needs it.
 #
 # custom_sentences/ holds extra speech-to-phrase sentences, one directory per
 # language. They are read when the model is trained, i.e. on every start.
 
 services:
   stt-capture:
-    image: aivi/stt-capture:0.1.0
+    image: aivi/stt-capture:0.1.1
     pull_policy: never
     restart: unless-stopped
     user: "1000:1000"
@@ -62,6 +69,105 @@ services:
       # <satellite_id>=<assist_satellite entity>,<capture switch entity>
       - --satellite
       - living_room=assist_satellite.wohnung_wohnzimmer_aivi_satellit_assist_satellit,switch.wohnung_wohnzimmer_aivi_satellit_anfragen_aufzeichnen
+
+  stt-capture-cloud:
+    image: aivi/stt-capture:0.1.1
+    pull_policy: never
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "10310:10300"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      HASS_WEBSOCKET_URI: ${HASS_WEBSOCKET_URI:?HASS_WEBSOCKET_URI missing in .env}
+      HASS_TOKEN: ${HASS_TOKEN:?HASS_TOKEN missing in .env}
+    volumes:
+      # The same capture drive as stt-capture; see there.
+      - type: bind
+        source: /mnt/aivi-capture
+        target: /capture
+        bind:
+          propagation: rslave
+    command:
+      - --upstream
+      - tcp://stt-bridge:10300
+      - --capture-dir
+      - /capture/drive
+      # The same lines as stt-capture: one pipeline runs at a time.
+      - --satellite
+      - living_room=assist_satellite.wohnung_wohnzimmer_aivi_satellit_assist_satellit,switch.wohnung_wohnzimmer_aivi_satellit_anfragen_aufzeichnen
+
+  stt-bridge:
+    image: aivi/stt-bridge:0.1.0
+    pull_policy: never
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import socket; s = socket.create_connection(('127.0.0.1', 10300), 3); s.sendall(b'{\"type\": \"describe\"}\\n'); assert b'\"info\"' in s.recv(65536)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      STT_BRIDGE_API_KEY: ${MISTRAL_API_KEY:-}
+      # Read-only use: the Assist names as hints for the transcription.
+      HASS_WEBSOCKET_URI: ${HASS_WEBSOCKET_URI:?HASS_WEBSOCKET_URI missing in .env}
+      HASS_TOKEN: ${HASS_TOKEN:?HASS_TOKEN missing in .env}
+    command:
+      - --api-url
+      - ${STT_API_URL:-https://api.mistral.ai/v1}
+      - --model
+      - ${STT_MODEL:-voxtral-mini-latest}
+      - --language
+      - de
+
+  llm-proxy:
+    image: aivi/llm-proxy:0.2.1
+    pull_policy: never
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "18001:8001"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      LLM_UPSTREAM_BASE_URL: ${LLM_UPSTREAM_BASE_URL:-https://api.mistral.ai/v1}
+      LLM_UPSTREAM_API_KEY: ${MISTRAL_API_KEY:-}
+      LLM_UPSTREAM_MODEL: ${LLM_UPSTREAM_MODEL:-mistral-small-latest}
+      # Mistral refuses OpenAI's `user`; Home Assistant sends it.
+      LLM_UPSTREAM_DROP_PARAMS: user
+      LLM_UPSTREAM_EXTRA_BODY: ${LLM_UPSTREAM_EXTRA_BODY:-}
+      # The model name Home Assistant sees; it stays when the upstream changes.
+      LLM_PROXY_MODEL_ALIAS: aivi
+      LLM_PROXY_API_KEY: ${LLM_PROXY_API_KEY:-}
+      LLM_PROXY_REQUIRE_API_KEY: "true"
+      LLM_PROXY_DAILY_REQUEST_LIMIT: ${LLM_PROXY_DAILY_REQUEST_LIMIT:-500}
+      LLM_PROXY_UPSTREAM_TIMEOUT_SECONDS: "30"
+      # Home Assistant speaks this when the provider cannot be reached.
+      LLM_PROXY_UNAVAILABLE_MESSAGE: Das Sprachmodell ist gerade nicht erreichbar.
+      LLM_PROXY_ENABLE_CAPTURE: ${LLM_PROXY_ENABLE_CAPTURE:-true}
+      LLM_PROXY_CAPTURE_DIR: /capture/drive/aivi-llm
+      LLM_PROXY_CAPTURE_MARKER: /capture/drive/.aivi-capture-volume
+    volumes:
+      # The same capture drive as stt-capture; see there.
+      - type: bind
+        source: /mnt/aivi-capture
+        target: /capture
+        bind:
+          propagation: rslave
 
   wake-word-recorder:
     image: aivi/wake-word-recorder:0.1.0

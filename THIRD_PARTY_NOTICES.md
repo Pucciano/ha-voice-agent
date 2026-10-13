@@ -30,6 +30,20 @@ This project uses third-party software and model artifacts.
 | python-dotenv | 1.1.1 | BSD-3-Clause |
 | uvicorn | 0.35.0 | BSD-3-Clause |
 
+## Python dependencies (stt_bridge)
+
+| Package | Version | License (upstream) |
+|---|---|---|
+| httpx | 0.28.1 | BSD-3-Clause |
+| websockets | 17.2 | BSD-3-Clause |
+| wyoming | 1.10.2 | MIT |
+
+## Cloud services (Jetson, stage 1 of issue #18)
+
+The Jetson's `llm-proxy` and `stt-bridge` call the Mistral AI API (chat
+completions and audio transcriptions) with the operator's own key. Its use is
+governed by Mistral AI's terms of service, not by this repository's license.
+
 ## Training dependencies
 
 | Package | Version | License (upstream) |

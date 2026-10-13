@@ -43,6 +43,14 @@ processes the text with optional tool calls against Home Assistant entities,
 and Piper generates the spoken response. The final audio is played back through
 a Bluesound Pulse Flex speaker using the BluOS Custom Integration API.
 
+Until the inference server is in place, a Jetson Nano serves the speech
+services. Its first pipeline recognises fixed sentences offline with
+Speech-to-Phrase. The LLM pipeline runs in stage 1 against a cloud model
+(Mistral) for the agent and for speech to text; Home Assistant reaches both
+through the Jetson's `llm_proxy` and `stt_bridge`, so moving to a local model
+later changes the Jetson's configuration, not Home Assistant
+(`docs/llm_assistant.md`).
+
 ## Hardware stack
 
 The inference server and training hardware are deliberately separated.
@@ -99,6 +107,7 @@ config/homeassistant/              Home Assistant automations, dashboards, helpe
 esphome/                           satellite firmware: device files, packages and local components
 services/
   llm_proxy/                       FastAPI proxy with tool-call repair
+  stt_bridge/                      Wyoming speech to text through a cloud transcription API
   stt_capture/                     Wyoming relay that stores voice requests for STT training
   wake_word_recorder/              stores wake word training takes streamed by the satellites
   stt_faster_whisper/              custom Whisper container build
@@ -187,6 +196,10 @@ scripts/smoke_test_llm_proxy.sh   # dev stack only
 | Wyoming Piper (TTS) | 10200 | Wyoming/TCP |
 | llm_proxy (dev only) | 18001 | HTTP |
 
+On the Jetson Nano (`compose/jetson`), port 10300 serves Speech-to-Phrase,
+10310 the cloud speech-to-text bridge, 10200 Piper and 18001 the
+`llm_proxy` in front of the cloud model.
+
 ## llm_proxy
 
 The proxy service in `services/llm_proxy` is the central piece of the
@@ -196,6 +209,11 @@ validation with a single retry repair mechanism. Every request-response pair is
 written to JSONL files under `dev/datasets/llm/`, capturing timestamps,
 latency, token counts, tool-call validity, and whether a repair attempt was
 needed. This captured data feeds directly into the LoRA fine-tuning pipeline.
+
+The upstream is any OpenAI-compatible server. On the Jetson the proxy maps a
+fixed model alias to a cloud model, keeps the provider key, requires a client
+key, drops parameters the provider refuses, enforces a daily request limit
+and captures to the USB drive (`docs/jetson_setup.md`, section 11).
 
 ## Training
 
@@ -248,7 +266,11 @@ Further setup and operational guides live in the `docs/` directory:
   answers, the echo canceller self test, and voice timers.
 - `docs/jetson_setup.md` sets up the Jetson Nano speech server
   (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
-  capture of voice requests for STT training, and the wake word recorder.
+  capture of voice requests for STT training, the wake word recorder, the
+  LLM proxy and the cloud speech-to-text bridge.
+- `docs/llm_assistant.md` covers the LLM pipeline for free speech: the
+  cloud stage behind the Jetson, the Home Assistant setup, the model
+  comparison and the measured latency.
 - `docs/wall_display.md` covers the wall displays in the living room and
   the bedroom: shared design, layout, device settings, Home Assistant
   prerequisites and the deploy script.
@@ -266,6 +288,8 @@ make prod-up          # start production stack
 make prod-down        # stop production stack
 make test             # run compileall and basic checks
 make aec-tuning-test  # echo canceller self test engine against a simulated room
+make llm-proxy-test   # llm_proxy against a fake upstream
+make stt-bridge-test  # speech-to-text bridge against a fake API and Home Assistant
 make wall-display-check   # validate the wall display dashboards offline
 make wall-display-deploy HA_ENV=<env-file>   # save changed wall displays (with backup)
 make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU

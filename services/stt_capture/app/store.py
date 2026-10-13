@@ -53,6 +53,13 @@ class Sample:  # pylint: disable=too-many-instance-attributes
     stt_latency_ms: int | None
 
 
+def _label_source(stt_info: dict[str, Any] | None) -> str:
+    """The upstream program that made the pseudo label."""
+
+    program = (stt_info or {}).get("program")
+    return program if isinstance(program, str) and program else "unknown"
+
+
 def _dbfs(value: float, full_scale: float) -> float | None:
     if value <= 0:
         return None
@@ -172,7 +179,7 @@ class Store:
             "satellite_id": sample.satellite.satellite_id,
             "satellite_entity": sample.satellite.satellite_entity,
             "language": sample.language,
-            "label_source": "speech-to-phrase",
+            "label_source": _label_source(sample.stt_info),
             "verified": False,
             "pseudo_transcript": sample.transcript,
             "capture_outcome": sample.outcome,

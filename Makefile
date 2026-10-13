@@ -1,5 +1,6 @@
 .PHONY: dev-up dev-up-debug dev-down prod-up prod-down lint format test eval \
 	stt-capture-test wake-word-recorder-test aec-tuning-test \
+	llm-proxy-test stt-bridge-test \
 	wall-display-check wall-display-diff wall-display-deploy wall-display-test \
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
 	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-pull \
@@ -44,13 +45,13 @@ prod-down:
 	docker compose -f compose/prod/docker-compose.yml down
 
 lint:
-	pylint --rcfile=.pylintrc services/llm_proxy/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts/*.py
+	pylint --rcfile=.pylintrc services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts/*.py
 
 format:
-	black --line-length 80 services/llm_proxy/app services/stt_capture/app services/wake_word_recorder/app tests/stt_capture tests/wake_word_recorder tests/wall_display training/eval training/llm training/stt training/wake_word scripts/*.py
+	black --line-length 80 services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app tests/llm_proxy tests/stt_bridge tests/stt_capture tests/wake_word_recorder tests/wall_display training/eval training/llm training/stt training/wake_word scripts/*.py
 
 test:
-	python -m compileall -q -x '/\.venv/' services/llm_proxy/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts
+	python -m compileall -q -x '/\.venv/' services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts
 
 # Request capture relay (services/stt_capture); standard library only, so
 # pytest is the only extra.
@@ -61,6 +62,16 @@ stt-capture-test:
 # own, because both services name their package `app`.
 wake-word-recorder-test:
 	uvx --python 3.12 --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/wake_word_recorder
+
+# LLM proxy (services/llm_proxy) against a fake upstream; with the service's
+# own pinned requirements.
+llm-proxy-test:
+	uvx --python 3.12 --with-requirements services/llm_proxy/requirements.txt --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/llm_proxy
+
+# Speech-to-text bridge (services/stt_bridge) against a fake transcription
+# API and a fake Home Assistant websocket.
+stt-bridge-test:
+	uvx --python 3.12 --with-requirements services/stt_bridge/requirements.txt --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/stt_bridge
 
 # Echo canceller self test engine (esphome/components/aec_tuning) against a
 # simulated room; needs a host C++ compiler.
