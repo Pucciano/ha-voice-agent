@@ -45,11 +45,13 @@ sections. In between:
 
 | Section | Content |
 |---|---|
+| Lichtwecker | Sunrise alarm on the bed light: alarm time with −/+ 5 minutes (a tap on the time opens the time picker), weekdays, duration, "Nur an Arbeitstagen", the next alarm, a one-minute preview and a stop button while it runs; the switch in the heading turns the alarm on and off. See `docs/bedroom_sunrise_alarm.md` |
 | Licht · Schlafzimmer | Ceiling light and bed (a WLED strip with one segment); "Alle N aus" as in the living room. The wardrobe lights have no tile: they stay on and follow their own sensors |
 | Lichtszenen | Love, Day, Night, Ocean, Sunset and Reading in two rows of three; a tap activates the scene, a long press opens its details |
 
 The climate section lists the bedroom first. `main` holds the header,
-weather, lights and scenes; `side` holds music, climate and appliances.
+the alarm, weather, lights and scenes; `side` holds music, climate and
+appliances.
 
 The palette follows `sun.sun`: light (`scandi_beige` colours) by day, dark
 while the sun is below the horizon. The view theme `scandi_beige` styles the
@@ -133,6 +135,9 @@ profile to "Schlafzimmer".
   for the bedroom scene tiles. A tile without its entity shows "Nicht angelegt" and does nothing.
   A tile also takes a script; it then runs `script.turn_on`.
 - `sensor.time` from the Time & Date integration drives the clock.
+- For the bedroom alarm section: the helpers, scene and script of the
+  sunrise alarm and the Workday integration, see
+  `docs/bedroom_sunrise_alarm.md`.
 - Weather from the Deutscher Wetterdienst, see Weather sources.
 - The two font files in `/config/www/fonts/` (see Fonts).
 
@@ -265,6 +270,7 @@ Shelly app; both are open to the whole network otherwise.
 | Deploy stops with "must not replace shared ones" | A room file defines a template with the name of a shared one; rename it or change the shared template |
 | Header and sidebar visible on the bedroom device | The URL lacks `?kiosk` |
 | Scene tile shows "Nicht angelegt" | The scene entity does not exist yet or has another entity id |
+| Buttons drawn by a template do nothing | button-card disables a card without actions and child cards (`pointer-events: none`); give the custom field `pointer-events: auto`, as `wd_alarm` does |
 | Volume follows a drag on the slider, but the speaker does not change | The Shelly app takes over horizontal swipes and cancels the touch, so no `change` event fires; the slider therefore also sends on `touchend` and `touchcancel` |
 | "Vorhersage wird geladen …" | The daily forecast arrives through a websocket subscription; it shows within a minute. If it stays, check that `weather.dwd` exists and has a forecast |
 | Summary counts too many lights | A group member lacks the label `light_count_exclude` |

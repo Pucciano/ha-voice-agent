@@ -95,7 +95,7 @@ compose/
   dev/docker-compose.override.yml  debug capture and packet inspection
   dev/vllm.config.yaml             vLLM engine configuration for dev
   jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper, capture relay, wake word recorder)
-config/homeassistant/              Home Assistant automations, dashboards and helper templates
+config/homeassistant/              Home Assistant automations, dashboards, helpers and the bedroom alarm
 esphome/                           satellite firmware: device files, packages and local components
 services/
   llm_proxy/                       FastAPI proxy with tool-call repair
@@ -252,6 +252,9 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/wall_display.md` covers the wall displays in the living room and
   the bedroom: shared design, layout, device settings, Home Assistant
   prerequisites and the deploy script.
+- `docs/bedroom_sunrise_alarm.md` covers the sunrise alarm on the bedroom's
+  WLED bed light: behaviour, helpers, scene, script, automation and the WLED
+  reset preset.
 
 ## Makefile helpers
 
