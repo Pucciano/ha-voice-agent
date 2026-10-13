@@ -270,7 +270,7 @@ Shelly app; both are open to the whole network otherwise.
 | Deploy stops with "must not replace shared ones" | A room file defines a template with the name of a shared one; rename it or change the shared template |
 | Header and sidebar visible on the bedroom device | The URL lacks `?kiosk` |
 | Scene tile shows "Nicht angelegt" | The scene entity does not exist yet or has another entity id |
-| Buttons drawn by a template do nothing | button-card disables a card without actions and child cards (`pointer-events: none`); give the custom field `pointer-events: auto`, as `wd_alarm` does |
+| Buttons drawn as HTML in a template react to the mouse but not, or only now and then, to touch | button-card's own touch handler calls `preventDefault` on `touchend` on every card around them, so the phone sends no click; it lets one through only after the finger moved. Make every control a nested button-card, as the alarm card does |
 | Volume follows a drag on the slider, but the speaker does not change | The Shelly app takes over horizontal swipes and cancels the touch, so no `change` event fires; the slider therefore also sends on `touchend` and `touchcancel` |
 | "Vorhersage wird geladen …" | The daily forecast arrives through a websocket subscription; it shows within a minute. If it stays, check that `weather.dwd` exists and has a forecast |
 | Summary counts too many lights | A group member lacks the label `light_count_exclude` |

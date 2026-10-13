@@ -196,4 +196,4 @@ WLED.
 | The light jumps to daylight before the end | A button of the remote was pressed |
 | After a stop the next "on" shows the sunrise | The preset "Bedroom Bed Alarm Reset" is missing or not listed in `select.bedroom_bed_wled_preset`; reload the WLED integration |
 | "Arbeitstage werden geladen …" stays | The display could not read `calendar.arbeitstag_kalender` |
-| Buttons of the alarm card do nothing | button-card sets `pointer-events: none` on a card without actions and child cards; the body of `wd_alarm` sets them back |
+| A control of the alarm card reacts to the mouse but not to touch | It is drawn as HTML instead of a nested button-card; button-card calls `preventDefault` on `touchend`, so the phone sends no click (see `docs/wall_display.md`) |
