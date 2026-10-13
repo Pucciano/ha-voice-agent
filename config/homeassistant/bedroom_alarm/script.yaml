@@ -57,9 +57,14 @@ sequence:
       entity_id: number.wled_geschwindigkeit
     data:
       value: "{{ sunrise_minutes }}"
+  # Without a transition: WLED's default of 0.7 s would blend from the last
+  # look, usually the full white channel, and flash white before the dark
+  # start of the effect.
   - action: scene.turn_on
     target:
       entity_id: scene.bedroom_sunrise
+    data:
+      transition: 0
   - alias: Wait for the sunrise, a button of the remote or the light off
     wait_for_trigger:
       - trigger: state

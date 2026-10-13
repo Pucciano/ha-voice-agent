@@ -26,7 +26,10 @@ The sunrise and what follows:
    the scene "Schlafzimmer Sunrise" starts WLED's Sunrise effect at full
    brightness. The effect fills the strip from its middle with the Fire
    palette, which begins black. The scene also sets a primary colour
-   without white, see "White channel" below.
+   without white, see "White channel" below, and the script activates it
+   without a transition: WLED's default of 0.7 seconds blended from the
+   last look, the full white channel, and flashed white before the dark
+   start.
 2. **Daylight.** At the alarm time the strip fades in 10 seconds to the bed
    light of the scene "Schlafzimmer Day": solid, white channel only, full
    brightness. The ceiling light stays as it is. The effect alone would end
@@ -187,6 +190,7 @@ WLED.
 | Symptom | Cause |
 |---|---|
 | No sunrise on a selected weekday | Check the trace of "Lichtwecker Schlafzimmer": the alarm is off, nobody is home, the bed light was on, or the day is a holiday with "Nur an Arbeitstagen" |
+| The strip flashes white for about a second when the sunrise starts | The scene was activated with WLED's default transition, which blends from the last look; the script passes `transition: 0`. Activating the scene by hand still blends |
 | The whole strip is bright from the start of the sunrise | The primary colour has white, so every pixel gets it (see White channel); the scene must set `rgbw_color` with white 0 |
 | The sunrise shows other colours | The bed light's palette is not "Default"; with "Default" the Sunrise effect uses the Fire palette |
 | The light jumps to daylight before the end | A button of the remote was pressed |
