@@ -25,7 +25,8 @@ The sunrise and what follows:
 1. **Sunrise.** The WLED effect speed becomes the duration in minutes, and
    the scene "Schlafzimmer Sunrise" starts WLED's Sunrise effect at full
    brightness. The effect fills the strip from its middle with the Fire
-   palette, which begins black.
+   palette, which begins black. The scene also sets a primary colour
+   without white, see "White channel" below.
 2. **Daylight.** At the alarm time the strip fades in 10 seconds to the bed
    light of the scene "Schlafzimmer Day": solid, white channel only, full
    brightness. The ceiling light stays as it is. The effect alone would end
@@ -41,8 +42,35 @@ Someone who is awake takes over:
 | Daylight | Any button of the remote, or light off | The light stays as it is; no automatic off |
 
 The next "on" shows the last look, as after any scene: daylight, or, after
-a stop during the sunrise, the colour from before the alarm at full
-brightness.
+a stop during the sunrise, the white channel at full brightness.
+
+## White channel
+
+The bed strip is RGBW, and WLED's palettes have no white. WLED takes the
+white of every pixel from the segment's primary colour instead
+(`Segment::color_from_palette`: `palcol.w = W(color)`). The bed light's
+usual white, `[0, 0, 0, 255]`, therefore lit the whole strip at full white
+from the first second, with the red sun barely visible in the middle. The
+scene sets the primary colour to `[255, 0, 0, 0]`: its red is not shown,
+because the effect draws from the palette, and its white is 0. WLED's auto
+white mode "Dual" then adds white only where the palette turns pale yellow
+and white at the end.
+
+Measured with WLED's live view on a one-minute preview (pixel colours with
+white added, middle of the strip / a quarter in / the edge):
+
+| Time | Middle | Quarter | Edge |
+|---|---|---|---|
+| 2 s | `260000` dark red | `130000` | black |
+| 11 s | `A70000` red | `4D0000` | black |
+| 20 s | `F78A24` orange | `9F0000` | black |
+| 26 s | `FFE229` yellow | `B50902` | black |
+| 41 s | `FFFF8F` pale yellow | `FFA529` | black |
+| 57 s | `FFFF8F` | `FFFF8F` | black |
+| 72 s | daylight, white channel | | |
+
+The outermost pixels stay dark during the sunrise: the effect grows from
+the middle and reaches the ends only in the daylight step.
 
 ## Entities
 
@@ -81,11 +109,11 @@ The preset "Bedroom Bed Alarm Reset" (`wled_reset_preset.json`) sets the
 effect back to solid and leaves the light off:
 
 ```json
-{"on": false, "seg": [{"id": 0, "fx": 0}]}
+{"on": false, "seg": [{"id": 0, "fx": 0, "col": [[0, 0, 0, 255]]}]}
 ```
 
 Without it, the next "on" after a stop during the sunrise would show what
-is left of the Sunrise effect. Home Assistant can only change the effect by
+is left of the Sunrise effect, or the scene's red. Home Assistant can only change the effect by
 turning the light on, which would flash in a dark bedroom.
 
 WLED applies a preset that is saved through its JSON API right away, so
@@ -96,7 +124,7 @@ curl -s http://<wled-ip>/presets.json -o presets_backup.json
 ```
 
 ```bash
-curl -s -X POST -H 'Content-Type: application/json' -d '{"on":false,"seg":[{"id":0,"fx":0}],"o":true,"psave":2,"n":"Bedroom Bed Alarm Reset"}' http://<wled-ip>/json/state
+curl -s -X POST -H 'Content-Type: application/json' -d '{"on":false,"seg":[{"id":0,"fx":0,"col":[[0,0,0,255]]}],"o":true,"psave":2,"n":"Bedroom Bed Alarm Reset"}' http://<wled-ip>/json/state
 ```
 
 `psave` is the preset id; use a free one. In the WLED web interface the
@@ -145,13 +173,21 @@ With the light, only when nobody sleeps in the bedroom: "Vorschau" on the
 display runs the script with one minute of sunrise and one minute of
 daylight. Check the effect, the daylight and the fade-out, then run it again
 and turn the light off during the sunrise: the light stays off, and WLED's
-`/json/state` shows `"on": false` and `"fx": 0`.
+`/json/state` shows `"on": false`, `"fx": 0` and the white channel as
+primary colour.
+
+The pixel colours can be read without looking at the strip: WLED's
+websocket (`ws://<wled-ip>/ws`) sends the live view after the message
+`{"lv": true}`, as binary frames of `L`, a version byte and three bytes per
+LED (RGB with the white channel added). `/json/live` is not built into this
+WLED.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | No sunrise on a selected weekday | Check the trace of "Lichtwecker Schlafzimmer": the alarm is off, nobody is home, the bed light was on, or the day is a holiday with "Nur an Arbeitstagen" |
+| The whole strip is bright from the start of the sunrise | The primary colour has white, so every pixel gets it (see White channel); the scene must set `rgbw_color` with white 0 |
 | The sunrise shows other colours | The bed light's palette is not "Default"; with "Default" the Sunrise effect uses the Fire palette |
 | The light jumps to daylight before the end | A button of the remote was pressed |
 | After a stop the next "on" shows the sunrise | The preset "Bedroom Bed Alarm Reset" is missing or not listed in `select.bedroom_bed_wled_preset`; reload the WLED integration |

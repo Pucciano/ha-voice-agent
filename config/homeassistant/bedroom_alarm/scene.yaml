@@ -9,6 +9,12 @@
 # the scene. Brightness stays at 255 throughout: the palette makes the
 # light dark at the start, not the brightness.
 #
+# The palette has no white channel: WLED takes each pixel's white from the
+# segment's primary colour. The usual white of the bed light ([0, 0, 0, 255])
+# would light the whole strip from the start, so the primary colour has no
+# white. Its red is not shown; WLED's auto white ("Dual") adds white from
+# the pale yellow and white end of the palette.
+#
 # The ceiling light is left as it is.
 id: bedroom_sunrise
 name: Schlafzimmer Sunrise
@@ -18,3 +24,4 @@ entities:
     state: "on"
     brightness: 255
     effect: Sunrise
+    rgbw_color: [255, 0, 0, 0]

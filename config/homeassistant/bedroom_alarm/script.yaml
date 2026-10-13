@@ -14,9 +14,9 @@
 # Someone who is awake takes over:
 # - Light off during the sunrise (RODRET, voice, app, "Stopp" on the
 #   display): the WLED preset "Bedroom Bed Alarm Reset"
-#   (wled_reset_preset.json) sets the effect back to solid while the light
-#   stays off. Otherwise the next "on" would show what is left of the
-#   sunrise. The colour from before the alarm stays; the brightness is 255.
+#   (wled_reset_preset.json) sets the effect back to solid and the colour
+#   to the white channel while the light stays off. Otherwise the next "on"
+#   would show what is left of the sunrise. The brightness is 255.
 # - Any other RODRET button during the sunrise: daylight at once, and the
 #   light stays on until someone turns it off.
 # - Any RODRET button or light off during daylight: the script ends and the
