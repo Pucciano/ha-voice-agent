@@ -235,8 +235,11 @@ reference.
    `config/homeassistant/aivi_jack_release.yaml`
    (`AIVI Klinkenausgang freigeben`) too: the speaker and its analog input,
    and the satellite's `Audioausgang`, assist satellite and
-   `Selbsttest Status`. Update both automations in Home Assistant with the
-   file content.
+   `Selbsttest Status`. Add it to `config/homeassistant/aivi_jack_playback.yaml`
+   (`AIVI Klinkenausgang Wiedergabe`) as well: the speaker in the three
+   triggers, and under `rooms` the speaker, its analog input and the
+   satellite's `Audioausgang`. Update the three automations in Home Assistant
+   with the file content.
 3. Set `Audioausgabe` to `Klinke`. The speaker switches to `Analog Input` and
    gets the fixed volume.
 
@@ -276,6 +279,17 @@ speaker to standby on its own. With `Audioausgabe` on the room speaker the
 analog input only carries what `Audioausgang` plays, so it is stopped
 10 minutes after that ends; the same holds for an input left selected after
 switching away from `Klinke`.
+
+`AIVI Klinkenausgang Wiedergabe` keeps music on `Audioausgang` in step with
+the speaker. When the speaker stops playing its analog input (paused with its
+button, the BluOS app, the wall display or a voice command, stopped, or
+switched to another source or group) while `Audioausgang` plays,
+`Audioausgang` pauses too, so Music Assistant and Spotify pause. Without it the
+music plays on unheard, and the next wake word, which restarts the paused
+input for the answer, brings it back. When a person starts the paused input
+again, `Audioausgang` resumes. Restarts by `AIVI Klinkenausgang` resume
+nothing: the speaker's state change carries the automation's context, and
+the 15 seconds after it triggered are skipped too.
 
 How the Pulse Flex treats its analog input (BluOS 4.12, read from the
 speaker's settings):

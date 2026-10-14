@@ -86,6 +86,15 @@ to its analog input when it starts.
 Music that the speaker plays on its own (Spotify Connect, BluOS presets)
 bypasses the satellite and stays outside the echo reference.
 
+Pause and play have to reach that source. Pausing the speaker (its button,
+the BluOS app, the wall display, a voice command for the room) only silences
+its analog input; the music plays on, and the next wake word restarts the
+input for the answer. So `config/homeassistant/aivi_jack_playback.yaml`
+pauses `Audioausgang` when the speaker stops playing its analog input; over
+Sendspin that pauses Music Assistant, and Music Assistant pauses Spotify.
+When a person starts the paused input again, `Audioausgang` resumes. A
+restart for an answer, a timer gong or the self test resumes nothing.
+
 Timer alarms always take the jack, whatever `Audioausgabe` says: the gong and
 the spoken "Der Timer … ist abgelaufen" play on `Audioausgang`, so a finished
 timer also switches a speaker that plays network answers to its analog input
