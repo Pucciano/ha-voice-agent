@@ -189,14 +189,14 @@ A "Hey AIVI" take:
 During a "Hey AIVI" take the wake word starts nothing and the ring gives no
 feedback, so nobody adapts their voice to what the current model already
 detects. The satellite still counts its detections; the status shows the
-number at the end, if `Wake Word` is set to `Hey AIVI` or `Beide`.
+number at the end.
 
 Everyday sound: set `Wake-Word-Aufnahme Art` to `Negativ (Alltag)`
 (30 minutes) and switch the take on. A red light circles. Leave it running
 during normal life: conversations, TV, music, cooking, phone calls. The
-assistant works as usual, but use "Okay Nabu" for commands: a "Hey AIVI" the
-satellite detects is cut out at import (section 5), one it misses stays in
-the everyday sound and teaches the model the wrong thing. This audio is used
+assistant works as usual. A "Hey AIVI" the satellite detects is cut out at
+import (section 5), but one it misses stays in the everyday sound and
+teaches the model the wrong thing, so keep commands rare during the take. This audio is used
 three ways: as background noise in the augmentation, as negative training
 data, and, from the last quarter of each recording, to measure false accepts
 per hour.
@@ -247,7 +247,7 @@ make ww-record HOST=<satellite-ip> SPEAKER=<name> TAKES=5
 
 Each take works like this:
 
-1. Say "Okay Nabu". The ring pulses white-blue twice and the recording
+1. Say "Hey AIVI". The ring pulses white-blue twice and the recording
    starts.
 2. For 60 seconds, say "Hey AIVI" every two to three seconds. Vary the
    distance (next to it, 1 m, 3 m, across the room), the direction, the
@@ -421,11 +421,10 @@ cp dev/models/wake_word/hey_aivi/<run>/hey_aivi.{json,tflite} esphome/models/
 make sat-flash SAT=<room> DEVICE=<ip-address>
 ```
 
-The build fails without these files. The firmware runs "Hey AIVI" next to
-"Okay Nabu". Set the new cutoffs for "Hey AIVI" in the
-`Wake-Word-Empfindlichkeit` select in `esphome/packages/aivi-voice-input.yaml`.
-The satellite's `Wake Word` select in Home Assistant chooses `Okay Nabu`,
-`Hey AIVI` or `Beide`. Home Assistant's own `Aktivierungswort` select stays
+The build fails without these files. "Hey AIVI" is the satellite's only wake
+word; "Okay Nabu" was removed because of false accepts in room conversation.
+Set the new cutoffs in the `Wake-Word-Empfindlichkeit` select in
+`esphome/packages/aivi-voice-input.yaml`. Home Assistant's own `Aktivierungswort` select stays
 unavailable: Home Assistant fills it only for satellites that play
 announcements. Disable it on the device page to avoid confusion.
 
@@ -439,7 +438,7 @@ announcements. Disable it on the device page to avoid confusion.
 | `Fehler: Sprecher ungültig` | Capital letter, space or umlaut in the name | Write it like `juergen` |
 | `Gespeichert: …, Netzwerk zu langsam` | Wi-Fi stalled for more than 5 s | The audio up to the stall is kept; start a new take |
 | Mac recorder: Home Assistant still holds the voice assistant | Only one voice assistant client is allowed | Disable the ESPHome entry in Home Assistant |
-| Mac recorder: a take never starts | "Okay Nabu" not detected, or microphone muted | Check the ring; switch `Mikrofon stumm` off |
+| Mac recorder: a take never starts | "Hey AIVI" not detected, or microphone muted | Check the ring; switch `Mikrofon stumm` off |
 | Few or no clips from a recording | Too quiet, or no pauses between the phrases | Speak up, pause two seconds, check `clips.csv` |
 | Many clips to review | Whisper hears no "Hey" at the start | Listen; add the good ones to `accepted.txt` |
 | German preview samples are seconds long | Duration noise too high | Lower `noise_scale_ws` for `de_DE-mls-medium` |
