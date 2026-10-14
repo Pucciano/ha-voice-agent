@@ -1,0 +1,114 @@
+# Home Assistant automation: pause and resume the music of an AIVI satellite
+# with the room speaker (issue #17). It is deployed through the automation
+# config API; keep this copy and Home Assistant in sync.
+#
+# Music through the jack comes from the satellite's media player
+# "Audioausgang" (Music Assistant over Sendspin, the Spotify app through Music
+# Assistant, media from Home Assistant); the room speaker only plays its
+# analog input. Pausing the speaker (its button, the BluOS app, the wall
+# display, a voice command for the room) silences the input, but the source
+# plays on. "AIVI Klinkenausgang" restarts a paused input for the next answer,
+# so without this automation every wake word, a false one too, brought the
+# music back.
+#
+# For each listed room:
+# - The speaker stops playing its analog input (paused, stopped, switched to
+#   another source or into a group) while "Audioausgang" plays: "Audioausgang"
+#   pauses too. Over Sendspin that pauses Music Assistant, which pauses
+#   Spotify. The next answer then plays alone.
+# - A person starts the paused input again (button, BluOS app, wall display):
+#   "Audioausgang" resumes. Restarts by "AIVI Klinkenausgang" for an answer,
+#   a timer gong or the self test resume nothing: their state change carries
+#   the automation's context, and the 15 s after it triggered are skipped in
+#   case the speaker reports late.
+#
+# "AIVI Klinkenausgang freigeben" (aivi_jack_release.yaml) stops the input
+# only after "Audioausgang" has been idle for 10 minutes, so it pauses
+# nothing here. A speaker that drops off the network pauses nothing either.
+#
+# List the same rooms as in aivi_jack_output.yaml.
+id: aivi_jack_playback
+alias: AIVI Klinkenausgang Wiedergabe
+description: Pausiert die Musik des AIVI-Satelliten mit dem Raumlautsprecher und setzt sie fort, wenn jemand den Lautsprecher wieder startet.
+mode: queued
+max: 10
+triggers:
+  # Entity ids of every listed room's speaker.
+  - trigger: state
+    entity_id:
+      - media_player.pulse_flex_living_room_1
+    from: playing
+    not_to:
+      - unavailable
+      - unknown
+    id: stopped
+  - trigger: state
+    entity_id:
+      - media_player.pulse_flex_living_room_1
+    attribute: source
+    id: source
+  - trigger: state
+    entity_id:
+      - media_player.pulse_flex_living_room_1
+    from: paused
+    to: playing
+    id: resumed
+variables:
+  # Its restarts of a paused input resume nothing.
+  jack_automation: automation.aivi_klinkenausgang
+  # satellite_id -> room speaker, its analog input and the satellite's media
+  # player
+  rooms:
+    living_room:
+      speaker: media_player.pulse_flex_living_room_1
+      source: Analog Input
+      player: media_player.wohnung_wohnzimmer_aivi_satellit_audioausgang
+  room: >-
+    {%- set ns = namespace(room={}) -%}
+    {%- for room in rooms.values() if room.speaker == trigger.entity_id -%}
+      {%- set ns.room = room -%}
+    {%- endfor -%}
+    {{ ns.room }}
+  source: "{{ room.source | default('') }}"
+  player: "{{ room.player | default('') }}"
+conditions:
+  - alias: Known room
+    condition: template
+    value_template: "{{ player != '' }}"
+actions:
+  - choose:
+      - alias: The speaker left its analog input, pause the satellite's music
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ trigger.id in ['stopped', 'source']
+                 and trigger.from_state.state == 'playing'
+                 and trigger.from_state.attributes.source == source
+                 and not (trigger.to_state.state == 'playing'
+                          and trigger.to_state.attributes.source == source)
+                 and trigger.to_state.state not in ['unavailable', 'unknown'] }}
+          - condition: template
+            value_template: "{{ is_state(player, 'playing') }}"
+        sequence:
+          - action: media_player.media_pause
+            target:
+              entity_id: "{{ player }}"
+      - alias: A person started the paused input again, resume the satellite's music
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ trigger.id == 'resumed'
+                 and trigger.from_state.attributes.source == source
+                 and trigger.to_state.attributes.source == source }}
+          - alias: Not restarted by an automation
+            condition: template
+            value_template: >-
+              {%- set last = state_attr(jack_automation, 'last_triggered') -%}
+              {{ trigger.to_state.context.parent_id is none
+                 and (last is none or now() - last > timedelta(seconds=15)) }}
+          - condition: template
+            value_template: "{{ states(player) not in ['playing', 'buffering', 'unavailable', 'unknown'] }}"
+        sequence:
+          - action: media_player.media_play
+            target:
+              entity_id: "{{ player }}"
