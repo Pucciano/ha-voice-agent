@@ -36,6 +36,7 @@ The living room, from top to bottom:
 | Safety | Red banner per wet leak sensor; amber pill when a leak sensor is offline; green "Alles trocken" otherwise |
 | Weather | Current condition, today's high and low, today and the next two days with chance of precipitation (from 20 %), temperature bars and a dot for the current temperature; below them the active and announced DWD weather warnings |
 | Licht · Wohnzimmer | Vitrine, Pendel, Stehlampe; "Alle N aus" turns off every counted light in the flat after a confirmation |
+| Fernsehen | The TV with its power (switch "Fernsehen", see `docs/tv_power.md`): "Aus · ohne Strom", "Startet", "An" with the app and the power draw, "Schaltet aus"; a tap switches it on or off, a long press opens the media player |
 | Musik | Active Bluesound player, play controls, volume, room chips to join or leave the group |
 | Raumklima | Temperature, humidity and window state per room, with the time a window was opened |
 | Geräte | Washing machine and dryer, while one of them runs or draws more than 5 W |

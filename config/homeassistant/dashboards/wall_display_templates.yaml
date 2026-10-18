@@ -1322,6 +1322,83 @@ button_card_templates:
         - line-height: 16px
         - color: "[[[ return variables.mode === 'running' ? '#5B4D44' : 'var(--wd-muted)'; ]]]"
 
+  # -------------------------------------------------------------------- tv --
+  # The TV behind its plug (docs/tv_power.md), in the shape of an appliance
+  # tile. The card's entity is the switch "Fernsehen"; the room file names the
+  # plug, its power sensor, the media player and both scripts as variables,
+  # and lists them in triggers_update. A tap switches the TV with its power on
+  # or off, a long press opens the media player.
+  wd_tv_tile:
+    template: wd_base
+    show_name: true
+    show_icon: true
+    show_state: true
+    tap_action: "[[[ return entity ? { action: 'toggle' } : { action: 'none' }; ]]]"
+    hold_action: "[[[ return { action: 'more-info', entity: variables.player }; ]]]"
+    variables:
+      mode: |
+        [[[
+          if (!entity || ['unavailable', 'unknown'].includes(entity.state)) return 'unknown';
+          if (states[variables.on_script]?.state === 'on') return 'starting';
+          if (states[variables.off_script]?.state === 'on') return 'stopping';
+          return entity.state === 'on' ? 'on' : 'off';
+        ]]]
+      # The switch is on while the TV starts as well; no reference to `mode`,
+      # so the order in which the variables are evaluated does not matter.
+      is_on: "[[[ return entity?.state === 'on'; ]]]"
+    state_display: |
+      [[[
+        const p = parseFloat(states[variables.power]?.state);
+        const watts = isNaN(p) ? '' : ` · ${Math.round(p)} W`;
+        if (variables.mode === 'unknown') return 'Nicht erreichbar';
+        if (variables.mode === 'starting') return 'Startet · knapp eine Minute';
+        if (variables.mode === 'stopping') return 'Schaltet aus';
+        if (variables.mode === 'on') {
+          const app = states[variables.player]?.attributes?.app_name;
+          return `An${app ? ` · ${app}` : ''}${watts}`;
+        }
+        return states[variables.plug]?.state === 'on' ? `Standby${watts}` : 'Aus · ohne Strom';
+      ]]]
+    styles:
+      card:
+        - height: 64px
+        - padding: 0 12px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - cursor: "[[[ return entity ? 'pointer' : 'default'; ]]]"
+        - opacity: "[[[ return variables.mode === 'unknown' ? 0.5 : 1; ]]]"
+        - background: "[[[ return variables.is_on ? 'var(--wd-tile-on)' : 'var(--wd-tile-off)'; ]]]"
+        - border: "[[[ return variables.is_on ? '1px solid transparent' : '1px solid var(--wd-line)'; ]]]"
+        - box-shadow: "[[[ return variables.is_on ? 'var(--wd-tile-on-shadow)' : 'none'; ]]]"
+        - color: "[[[ return variables.is_on ? '#2B2420' : 'var(--wd-ink)'; ]]]"
+      # Explicit rows, as in wd_appliance_tile.
+      grid:
+        - grid-template-areas: '"i n" "i s"'
+        - grid-template-columns: 34px minmax(0, 1fr)
+        - grid-template-rows: 18px 16px
+        - column-gap: 10px
+        - align-content: center
+      img_cell:
+        - width: 34px
+        - height: 34px
+        - border-radius: 17px
+        - background: "[[[ return variables.is_on ? '#A86F43' : 'var(--wd-surface2)'; ]]]"
+      icon:
+        - width: 18px
+        - color: "[[[ return variables.is_on ? '#FFFFFF' : 'var(--wd-muted)'; ]]]"
+      name:
+        - justify-self: start
+        - align-self: end
+        - font-size: 14px
+        - line-height: 18px
+        - font-weight: 700
+      state:
+        - justify-self: start
+        - align-self: start
+        - font-size: 12px
+        - line-height: 16px
+        - color: "[[[ return variables.is_on ? '#5B4D44' : 'var(--wd-muted)'; ]]]"
+
   # ---------------------------------------------------------------- scenes --
   # A light scene or script, in the shape of a light tile. Before the entity
   # exists the tile shows "Nicht angelegt" and does nothing.

@@ -3,8 +3,9 @@
 The living room TV (Sony XR-65X90K) has power only while someone watches.
 Its plug also feeds the soundbar and the power supply of the motorized
 Vogel's TVM 7675 wall mount. "Fernsehen" switches all of it on and off: the
-switch on a dashboard, the voice ("schalte den Fernseher an"), or the button
-on the plug.
+tile "Fernseher" in the section "Fernsehen" of the living room wall display
+(see `docs/wall_display.md`), the switch on any other dashboard, the voice
+("schalte den Fernseher an"), or the button on the plug.
 
 ## Why
 
