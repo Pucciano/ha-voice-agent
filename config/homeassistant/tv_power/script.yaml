@@ -1,0 +1,186 @@
+# Home Assistant scripts: power the living room TV only while it is used.
+# Both are deployed through the script config API as script.tv_power_on and
+# script.tv_power_off (keys below); keep this copy and Home Assistant in
+# sync. See docs/tv_power.md.
+#
+# The Sony XR-65X90K, its soundbar and the power supply of the Vogel's
+# TVM 7675 mount hang on one IKEA INSPELNING plug. In standby the TV never
+# sleeps and draws about 26 W, so the plug is off while nobody watches.
+#
+# Measured on 2026-10-18 (9 cold starts):
+# - The TV is on the network 32-36 s after the plug turns on.
+#   androidtv_remote reconnects every 30 s at most on its own; a reload of its
+#   config entry connects within a few seconds.
+# - After a cold start the TV reports "on" without a picture for about 110 s
+#   and ignores turn_on; KEYCODE_WAKEUP does nothing. One KEYCODE_POWER drops
+#   it into standby at once, and turn_on then brings the picture: 45-54 s from
+#   plug on to picture, instead of 114-116 s.
+# - The picture draws 68-74 W at the home screen, boot and standby 40 W at
+#   most. The first reading after the plug turns on can be the inrush current.
+# - After turn_off the TV reaches standby (about 28 W with the soundbar) within
+#   5-14 s and stays flat.
+#
+# The mount is not in Home Assistant yet (Bluetooth only). Its steps run once
+# `mount_select` names its preset select entity; until then the 60 s wait
+# before the power cut leaves it time to drive back on its own.
+
+tv_power_on:
+  alias: Fernsehen einschalten
+  description: Schaltet die Steckdose von Fernseher und Soundbar ein und schaltet den Fernseher über Android TV ein, sobald er gestartet ist.
+  icon: mdi:television
+  mode: single
+  max_exceeded: silent
+  variables:
+    plug: switch.living_room_lowboard_tv_plug
+    power: sensor.living_room_lowboard_tv_plug_power
+    # Zigbee2MQTT answers with fresh readings; on its own the plug reports
+    # changes only every few seconds.
+    plug_get_topic: zigbee2mqtt/living_room_lowboard_tv_plug/get
+    tv: media_player.sony_xr_65x90k_2
+    remote: remote.sony_xr_65x90k
+    picture_w: 45
+    mount_select: ""
+    mount_view_preset: Fernsehen
+    cold: "{{ is_state(plug, 'off') }}"
+    quirk_done: false
+  sequence:
+    - action: script.turn_off
+      target:
+        entity_id: script.tv_power_off
+    - if: "{{ cold }}"
+      then:
+        - action: switch.turn_on
+          target:
+            entity_id: "{{ plug }}"
+        - delay: 25
+    # Connect: reload androidtv_remote until it reaches the TV.
+    - repeat:
+        sequence:
+          - if: "{{ is_state(tv, 'unavailable') }}"
+            then:
+              - action: homeassistant.reload_config_entry
+                target:
+                  entity_id: "{{ tv }}"
+              - wait_template: "{{ not is_state(tv, 'unavailable') }}"
+                timeout: 8
+        until: "{{ not is_state(tv, 'unavailable') or repeat.index >= 12 }}"
+    - if: "{{ is_state(tv, 'unavailable') }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_power_on_failed
+            title: Fernseher
+            message: Der Fernseher ist nach dem Einschalten der Steckdose über Android TV nicht erreichbar.
+        - stop: The TV is not reachable through androidtv_remote.
+          error: true
+    # Picture: KEYCODE_POWER once while a cold TV reports "on" without a
+    # picture, turn_on whenever it reports "off". If POWER does not take, the
+    # TV settles to "off" by itself after about 110 s and turn_on follows.
+    - variables:
+        deadline: "{{ (now() + timedelta(seconds=180)).isoformat() }}"
+    - repeat:
+        sequence:
+          - action: mqtt.publish
+            data:
+              topic: "{{ plug_get_topic }}"
+              payload: '{"power": ""}'
+          - delay: 2
+          - choose:
+              - conditions: >-
+                  {{ cold and not quirk_done and is_state(tv, 'on')
+                     and states(power) | float(0) < picture_w }}
+                sequence:
+                  - action: remote.send_command
+                    target:
+                      entity_id: "{{ remote }}"
+                    data:
+                      command: KEYCODE_POWER
+                  - variables:
+                      quirk_done: true
+                  - wait_template: "{{ not is_state(tv, 'on') }}"
+                    timeout: 8
+              - conditions: "{{ is_state(tv, 'off') }}"
+                sequence:
+                  - action: media_player.turn_on
+                    target:
+                      entity_id: "{{ tv }}"
+                  - wait_template: "{{ is_state(tv, 'on') }}"
+                    timeout: 10
+        until: >-
+          {{ (is_state(tv, 'on') and (not cold or states(power) | float(0) >= picture_w))
+             or now() >= as_datetime(deadline) }}
+    - if: "{{ not is_state(tv, 'on') or (cold and states(power) | float(0) < picture_w) }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_power_on_failed
+            title: Fernseher
+            message: Der Fernseher hat Strom, ließ sich über Android TV aber nicht einschalten.
+        - stop: The TV did not switch on.
+          error: true
+    - action: persistent_notification.dismiss
+      data:
+        notification_id: tv_power_on_failed
+    - if: "{{ mount_select != '' }}"
+      then:
+        - action: select.select_option
+          target:
+            entity_id: "{{ mount_select }}"
+          data:
+            option: "{{ mount_view_preset }}"
+
+tv_power_off:
+  alias: Fernsehen ausschalten
+  description: Schaltet den Fernseher über Android TV aus und nach einer Wartezeit die Steckdose von Fernseher und Soundbar.
+  icon: mdi:television-off
+  mode: single
+  max_exceeded: silent
+  variables:
+    plug: switch.living_room_lowboard_tv_plug
+    power: sensor.living_room_lowboard_tv_plug_power
+    plug_get_topic: zigbee2mqtt/living_room_lowboard_tv_plug/get
+    tv: media_player.sony_xr_65x90k_2
+    standby_w: 35
+    # Wait between standby and the power cut; the mount must be back at the
+    # wall by then, because its power supply hangs on the same plug.
+    settle_s: 60
+    mount_select: ""
+    mount_wall_preset: Wand
+    mount_travel_s: 45
+  sequence:
+    - action: script.turn_off
+      target:
+        entity_id: script.tv_power_on
+    - if: "{{ mount_select != '' }}"
+      then:
+        - action: select.select_option
+          target:
+            entity_id: "{{ mount_select }}"
+          data:
+            option: "{{ mount_wall_preset }}"
+        - delay: "{{ mount_travel_s }}"
+    - if: "{{ is_state(tv, 'on') }}"
+      then:
+        - action: media_player.turn_off
+          target:
+            entity_id: "{{ tv }}"
+        - wait_template: "{{ not is_state(tv, 'on') }}"
+          timeout: 20
+    - action: mqtt.publish
+      data:
+        topic: "{{ plug_get_topic }}"
+        payload: '{"power": ""}'
+    - wait_template: "{{ states(power) | float(0) < standby_w }}"
+      timeout: 30
+    - delay: "{{ settle_s }}"
+    - action: mqtt.publish
+      data:
+        topic: "{{ plug_get_topic }}"
+        payload: '{"power": ""}'
+    - delay: 2
+    # Switched on again meanwhile (remote, voice): keep the power.
+    - condition: template
+      value_template: "{{ not is_state(tv, 'on') and states(power) | float(0) < standby_w }}"
+    - action: switch.turn_off
+      target:
+        entity_id: "{{ plug }}"

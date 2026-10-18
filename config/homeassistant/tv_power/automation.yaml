@@ -1,0 +1,136 @@
+# Home Assistant automations: power the living room TV only while it is used.
+# Each one is deployed through the automation config API under its id; keep
+# this copy and Home Assistant in sync. See docs/tv_power.md.
+#
+# The scripts (script.yaml) do the work; these automations only decide when
+# to run them. They start the scripts without waiting.
+
+# Voice. Sentence triggers win over the built-in intents, so "schalte den
+# Fernseher an" runs the power-on script instead of turn_on on the media
+# player, which cannot reach a TV without power. The media player keeps the
+# name "Fernseher" for pause, volume and the like.
+- id: tv_power_voice
+  alias: Fernsehen per Sprache
+  description: Startet "Fernsehen einschalten" oder "Fernsehen ausschalten", wenn jemand den Fernseher per Sprache an- oder ausschaltet.
+  mode: queued
+  triggers:
+    - trigger: conversation
+      command:
+        - "[schalte|schalt|mach] [den] Fernseher (an|ein)"
+        - "[schalte|schalt|mach] [das] Fernsehen (an|ein)"
+      id: "on"
+    - trigger: conversation
+      command:
+        - "[schalte|schalt|mach] [den] Fernseher aus"
+        - "[schalte|schalt|mach] [das] Fernsehen aus"
+      id: "off"
+  actions:
+    - choose:
+        - conditions: "{{ trigger.id == 'on' }}"
+          sequence:
+            - variables:
+                already_on: "{{ is_state('switch.tv_power', 'on') }}"
+            - action: script.turn_on
+              target:
+                entity_id: script.tv_power_on
+            - set_conversation_response: >-
+                {{ 'Der Fernseher ist schon an.' if already_on
+                   else 'Der Fernseher startet, das dauert knapp eine Minute.' }}
+        - conditions: "{{ trigger.id == 'off' }}"
+          sequence:
+            - action: script.turn_on
+              target:
+                entity_id: script.tv_power_off
+            - set_conversation_response: Der Fernseher wird ausgeschaltet.
+
+# Switched off with the TV's own remote (or anything else): the plug follows
+# after 5 minutes. The power check keeps a TV with a picture powered even
+# when androidtv_remote has lost it.
+- id: tv_power_auto_off
+  alias: Fernseher nach dem Ausschalten stromlos schalten
+  description: Schaltet die Steckdose von Fernseher und Soundbar aus, wenn der Fernseher 5 Minuten aus ist.
+  mode: single
+  triggers:
+    - trigger: template
+      value_template: >-
+        {{ is_state('switch.living_room_lowboard_tv_plug', 'on')
+           and not is_state('media_player.sony_xr_65x90k_2', 'on')
+           and states('sensor.living_room_lowboard_tv_plug_power') | float(0) < 40 }}
+      for: "00:05:00"
+  conditions:
+    - condition: template
+      value_template: >-
+        {{ not is_state('script.tv_power_on', 'on')
+           and not is_state('script.tv_power_off', 'on') }}
+    - condition: template
+      value_template: >-
+        {{ not (is_state('input_boolean.tv_update_window_enabled', 'on')
+                and is_state('schedule.tv_update_window', 'on')) }}
+  actions:
+    - action: script.turn_on
+      target:
+        entity_id: script.tv_power_off
+
+# The button on the plug replaces the TV's remote, which cannot switch on a TV
+# without power. Only the button counts: a change from the app or a dashboard
+# carries a user_id, and the scripts and the update window turn the plug on
+# themselves. Their changes carry no parent_id (seen on 2026-10-18: the run
+# of script.tv_power_on had none), so they are told apart by what is running.
+- id: tv_power_plug_button
+  alias: Fernseher über die Steckdosentaste einschalten
+  description: Schaltet den Fernseher ein, wenn jemand die Taste an seiner Steckdose drückt.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: switch.living_room_lowboard_tv_plug
+      from: "off"
+      to: "on"
+  conditions:
+    - condition: template
+      value_template: >-
+        {%- set window = state_attr('automation.tv_power_update_window', 'last_triggered') -%}
+        {{ trigger.to_state.context.user_id is none
+           and not is_state('script.tv_power_on', 'on')
+           and (window is none or now() - window > timedelta(minutes=1)) }}
+  actions:
+    - action: script.turn_on
+      target:
+        entity_id: script.tv_power_on
+
+# Optional weekly window (input_boolean.tv_update_window_enabled, off by
+# default) in which the TV has power in standby to install software and app
+# updates. The time is the schedule helper schedule.tv_update_window.
+- id: tv_power_update_window
+  alias: Fernseher Updatefenster
+  description: Gibt dem Fernseher im Zeitplan "Fernseher Updatefenster Zeit" Strom für Updates, wenn das Updatefenster eingeschaltet ist.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: schedule.tv_update_window
+      to: "on"
+      id: start
+    - trigger: state
+      entity_id: schedule.tv_update_window
+      to: "off"
+      id: end
+  conditions:
+    - condition: state
+      entity_id: input_boolean.tv_update_window_enabled
+      state: "on"
+  actions:
+    - choose:
+        - conditions: "{{ trigger.id == 'start' }}"
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.living_room_lowboard_tv_plug
+        # At the end only a TV that nobody watches loses its power.
+        - conditions: >-
+            {{ trigger.id == 'end'
+               and not is_state('media_player.sony_xr_65x90k_2', 'on')
+               and states('sensor.living_room_lowboard_tv_plug_power') | float(0) < 40
+               and not is_state('script.tv_power_on', 'on') }}
+          sequence:
+            - action: script.turn_on
+              target:
+                entity_id: script.tv_power_off
