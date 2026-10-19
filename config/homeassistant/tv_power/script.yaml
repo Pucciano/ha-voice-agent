@@ -191,3 +191,59 @@ tv_power_off:
       target:
         entity_id: "{{ plug }}"
 
+# Start an app, and the TV with its power first when it is off. Exposed to
+# Assist, so the LLM assistant can call it for other wording; the voice
+# sentences are in automation.yaml (tv_power_app_voice). The power-on goes
+# through the event tv_power_request, so it runs without the caller's rights
+# (see tv_power_command). The apps need their names in the options of the
+# Android TV Remote integration as well, for the dashboard.
+tv_launch_app:
+  alias: Fernseher App starten
+  description: Schaltet den Fernseher bei Bedarf ein und startet Netflix, YouTube, Disney+ oder Prime Video.
+  icon: mdi:television-play
+  mode: restart
+  fields:
+    app:
+      name: App
+      description: Die App, die auf dem Fernseher starten soll.
+      required: true
+      example: Netflix
+      selector:
+        select:
+          options:
+            - Netflix
+            - YouTube
+            - Disney+
+            - Prime Video
+  variables:
+    tv: media_player.sony_xr_65x90k_2
+    apps:
+      Netflix: com.netflix.ninja
+      YouTube: com.google.android.youtube.tv
+      Disney+: com.disney.disneyplus
+      Prime Video: com.amazon.amazonvideo.livingroom
+    app_id: "{{ apps.get(app, '') }}"
+  sequence:
+    - condition: template
+      value_template: "{{ app_id != '' }}"
+    - if: "{{ not is_state('switch.tv_power', 'on') or is_state('script.tv_power_on', 'on') }}"
+      then:
+        - if: "{{ not is_state('script.tv_power_on', 'on') }}"
+          then:
+            - event: tv_power_request
+              event_data:
+                action: "on"
+            - wait_template: "{{ is_state('script.tv_power_on', 'on') }}"
+              timeout: 10
+        - wait_template: "{{ is_state('script.tv_power_on', 'off') }}"
+          timeout: 240
+        # The launcher has just come up.
+        - delay: 2
+    - condition: template
+      value_template: "{{ is_state('switch.tv_power', 'on') }}"
+    - action: media_player.play_media
+      target:
+        entity_id: "{{ tv }}"
+      data:
+        media_content_type: app
+        media_content_id: "{{ app_id }}"
