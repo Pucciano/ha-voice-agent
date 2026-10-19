@@ -1341,7 +1341,10 @@ button_card_templates:
           if (!entity || ['unavailable', 'unknown'].includes(entity.state)) return 'unknown';
           if (states[variables.on_script]?.state === 'on') return 'starting';
           if (states[variables.off_script]?.state === 'on') return 'stopping';
-          return entity.state === 'on' ? 'on' : 'off';
+          if (entity.state === 'on') return 'on';
+          // The media player reports "on" without a picture after a cold
+          // start; the switch already leaves that out.
+          return states[variables.player]?.state === 'on' ? 'booting' : 'off';
         ]]]
       # The switch is on while the TV starts as well; no reference to `mode`,
       # so the order in which the variables are evaluated does not matter.
@@ -1353,8 +1356,13 @@ button_card_templates:
         if (variables.mode === 'unknown') return 'Nicht erreichbar';
         if (variables.mode === 'starting') return 'Startet · knapp eine Minute';
         if (variables.mode === 'stopping') return 'Schaltet aus';
+        if (variables.mode === 'booting') return `Fährt hoch${watts}`;
         if (variables.mode === 'on') {
-          const app = states[variables.player]?.attributes?.app_name;
+          // androidtv_remote reports the package id as the name unless the
+          // app has a name in the integration's options.
+          const attrs = states[variables.player]?.attributes ?? {};
+          const named = attrs.app_name && attrs.app_name !== attrs.app_id ? attrs.app_name : '';
+          const app = named || (attrs.app_id === 'com.google.android.apps.tv.launcherx' ? 'Startseite' : '');
           return `An${app ? ` · ${app}` : ''}${watts}`;
         }
         return states[variables.plug]?.state === 'on' ? `Standby${watts}` : 'Aus · ohne Strom';
