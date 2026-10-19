@@ -197,9 +197,21 @@ tv_power_off:
 # through the event tv_power_request, so it runs without the caller's rights
 # (see tv_power_command). The apps need their names in the options of the
 # Android TV Remote integration as well, for the dashboard.
+#
+# Safety:
+# - Only links from `apps` are ever sent. A field selector is no check at
+#   run time, so any other value of `app` (from the LLM, say) stops the run.
+# - A link is resolved by Android. An https link that more than one app
+#   claims shows "open with" (web or app), and a browser could open
+#   instead: https://www.disneyplus.com did that, vnd.youtube:// opened a
+#   system dialog (2026-10-19). So after the launch the foreground app must
+#   be the expected package within 8 s; otherwise BACK closes what opened,
+#   and a notification says so.
+# - Disney+ and Prime Video stay out until their links are checked against
+#   the apps' intent filters on the TV (docs/tv_power.md).
 tv_launch_app:
   alias: Fernseher App starten
-  description: Schaltet den Fernseher bei Bedarf ein und startet Netflix, YouTube, Disney+ oder Prime Video.
+  description: Schaltet den Fernseher bei Bedarf ein und startet Netflix oder YouTube.
   icon: mdi:television-play
   mode: restart
   fields:
@@ -213,23 +225,22 @@ tv_launch_app:
           options:
             - Netflix
             - YouTube
-            - Disney+
-            - Prime Video
   variables:
     tv: media_player.sony_xr_65x90k_2
-    # Deep links, not package ids: launching com.netflix.ninja did nothing on
-    # this TV (a Google Play Store change, see the androidtv_remote docs),
-    # netflix:// opened Netflix within 2 s (2026-10-19). The other three are
-    # the links from the androidtv_remote docs.
-    links:
-      Netflix: netflix://
-      YouTube: https://www.youtube.com
-      Disney+: https://www.disneyplus.com
-      Prime Video: https://app.primevideo.com
-    link: "{{ links.get(app, '') }}"
+    remote: remote.sony_xr_65x90k
+    # Checked on this TV on 2026-10-19: each opened its app directly, without
+    # a chooser. Package ids (market://launch?id=…) do nothing here.
+    apps:
+      Netflix:
+        link: netflix://
+        package: com.netflix.ninja
+      YouTube:
+        link: https://www.youtube.com
+        package: com.google.android.youtube.tv
+    entry: "{{ apps.get(app, {}) }}"
   sequence:
     - condition: template
-      value_template: "{{ link != '' }}"
+      value_template: "{{ entry.link is defined and entry.package is defined }}"
     - if: "{{ not is_state('switch.tv_power', 'on') or is_state('script.tv_power_on', 'on') }}"
       then:
         - if: "{{ not is_state('script.tv_power_on', 'on') }}"
@@ -250,4 +261,24 @@ tv_launch_app:
         entity_id: "{{ tv }}"
       data:
         media_content_type: app
-        media_content_id: "{{ link }}"
+        media_content_id: "{{ entry.link }}"
+    - wait_template: "{{ state_attr(tv, 'app_id') == entry.package }}"
+      timeout: 8
+    - if: "{{ state_attr(tv, 'app_id') != entry.package }}"
+      then:
+        - variables:
+            opened: "{{ state_attr(tv, 'app_id') }}"
+        - action: remote.send_command
+          target:
+            entity_id: "{{ remote }}"
+          data:
+            command: KEYCODE_BACK
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_launch_app_failed
+            title: Fernseher
+            message: >-
+              {{ app }} wurde nicht geöffnet; stattdessen erschien {{ opened }}.
+              Das wurde mit Zurück geschlossen.
+        - stop: The app link opened something else.
+          error: true

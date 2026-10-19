@@ -92,32 +92,57 @@ so nobody cuts the power of a running TV by voice.
 
 ## Apps
 
-"Starte Netflix" (also "öffne …", "… starten", "mach … an", optionally "auf
-dem Fernseher") works for Netflix, YouTube, Disney+ (also "Disney Plus") and
-Prime Video (also "Amazon Prime"). The automation "Fernseher App per
-Sprache" answers "Netflix startet." or, with the TV off, "Der Fernseher
-startet mit Netflix, das dauert etwa eine Minute.", and runs the script
-"Fernseher App starten". The script switches the TV on through the event
-`tv_power_request` when needed, waits for "Fernsehen einschalten" to finish,
-and starts the app with `media_player.play_media` (`media_content_type:
-app`) and a deep link. Only these four names have sentences, so "starte
-einen Timer" still reaches the built-in intents. Voxtral may write "Startet
-Netflix.", so the sentences accept "startet" too.
-
-The package ids do not start the apps on this TV (`com.netflix.ninja` left
-the TV on its home screen, also when retried a minute later); the
-androidtv_remote docs blame a Google Play Store change and recommend deep
-links. The script uses these:
-
-| App | Deep link | Checked |
-|---|---|---|
-| Netflix | `netflix://` | Opened Netflix within 2 s (2026-10-19) |
-| YouTube | `https://www.youtube.com` | From the docs, not yet |
-| Disney+ | `https://www.disneyplus.com` | From the docs, not yet |
-| Prime Video | `https://app.primevideo.com` | From the docs, not yet |
+"Starte Netflix" (also "öffne …", "… starten", "mach … an", optionally "ich"
+in front or "auf dem Fernseher" at the end) starts Netflix or YouTube. The
+automation "Fernseher App per Sprache" answers "Netflix startet." or, with
+the TV off, "Der Fernseher startet mit Netflix, das dauert etwa eine
+Minute.", and runs the script "Fernseher App starten". The script switches
+the TV on through the event `tv_power_request` when needed, waits for
+"Fernsehen einschalten" to finish, and opens the app with
+`media_player.play_media` (`media_content_type: app`) and a deep link.
+Disney+ and Prime Video have sentences too, but only answer "… kann ich auf
+dem Fernseher noch nicht starten." until their links are checked (below).
+Only these four names have sentences, so "starte einen Timer" still reaches
+the built-in intents. Voxtral wrote "Startet Netflix." and "Ich starte
+YouTube.", hence "startet" and the optional "ich".
 
 The script is exposed to Assist, so the LLM assistant can call it for other
-wording; its field `app` takes one of the four names.
+wording; its field `app` takes "Netflix" or "YouTube".
+
+### Links and safety
+
+A link is resolved by Android on the TV, not by Home Assistant. If more than
+one app claims it, Android asks "open with" (web or app), and with an https
+link a browser can open a website instead of the app. So:
+
+- **Allowlist:** the script sends only the links in its `apps` table. A
+  field selector is no check at run time; any other value of `app`, for
+  example an address from the LLM, stops the run before anything reaches the
+  TV (tested with "Disney+" and `https://example.com`).
+- **Check after the launch:** the foreground app (`app_id` of the media
+  player) must be the expected package within 8 s. Otherwise the script
+  sends BACK, which closes a chooser or a browser, and a notification
+  "Fernseher" names what opened instead. (This path has not run yet.)
+- **Only checked links:** package ids (`market://launch?id=…`) do nothing on
+  this TV; the androidtv_remote docs blame a Google Play Store change. What
+  was tried on 2026-10-19:
+
+| App | Link | Result |
+|---|---|---|
+| Netflix | `netflix://` | Opens Netflix within 2 s; used |
+| Netflix | `com.netflix.ninja` (package id) | Nothing, home screen stays |
+| YouTube | `https://www.youtube.com` | Opens YouTube directly, no chooser; used |
+| YouTube | `vnd.youtube://` | System dialog (`app_id` "android"), closed with BACK |
+| Disney+ | `https://www.disneyplus.com` | "Open with" web or app; closed with BACK; not used |
+| Prime Video | `https://app.primevideo.com` | Not tried; not used |
+
+Before Disney+ and Prime Video get a link, check which app resolves it on
+the TV instead of trying links: with ADB debugging switched on in the TV's
+developer options, `adb shell cmd package query-activities -a
+android.intent.action.VIEW -d <link>` lists every app that would open the
+link, and `adb shell dumpsys package <package>` shows the app's intent
+filters (schemes and hosts). A link that only the app itself resolves opens
+it without a chooser. Switch ADB off again afterwards.
 
 The Android TV Remote integration has the four apps with their package ids
 in its options (Settings → Devices & services → Android TV Remote →
@@ -141,7 +166,7 @@ teaches Speech-to-Phrase the same sentences; deploy it as described in
 | `switch.tv_power` | Fernsehen | On/off for dashboards and Assist (template helper) |
 | `script.tv_power_on` | Fernsehen einschalten | Power on, boot, picture |
 | `script.tv_power_off` | Fernsehen ausschalten | TV off, wait, power off |
-| `script.tv_launch_app` | Fernseher App starten | TV on when needed, then start an app (exposed to Assist) |
+| `script.tv_launch_app` | Fernseher App starten | TV on when needed, then start Netflix or YouTube by a checked link (exposed to Assist) |
 | `automation.tv_power_app_voice` | Fernseher App per Sprache | Voice sentences for the four apps |
 | `automation.tv_power_command` | Fernsehen an oder aus | Runs the scripts for the voice sentences and the event `tv_power_request` from the switch |
 | `automation.tv_power_auto_off` | Fernseher nach dem Ausschalten stromlos schalten | Power off 5 minutes after the TV went off |
@@ -236,7 +261,7 @@ the files in the repository are copies.
 |---|---|
 | Notification "nicht erreichbar" | The TV did not come up on the network; check the plug and the TV's network connection |
 | Notification "ließ sich nicht einschalten" | The POWER key and turn on had no effect within 3 minutes; check the trace of "Fernsehen einschalten" |
-| "Starte Netflix" switches the TV on but the app does not open | The deep link does not open the app on this TV; check the trace of "Fernseher App starten" and try another link from the androidtv_remote docs with `media_player.play_media` |
+| "Starte Netflix" switches the TV on but the app does not open | The link no longer opens the app; the notification names what opened instead. Check the link on the TV (see Links and safety) before changing it |
 | "Fernsehen einschalten" stops with "Unauthorized" | It was started directly by a user without admin rights; start it through the switch, the event `tv_power_request` or the voice |
 | The TV shuts down while someone watches | Android TV lost the TV and the plug reads less than 40 W, or the update window ended; check the trace of the automation that ran |
 | The plug stays on after the TV went off | A script was running when the TV went off, or the update window was on; the next "aus" turns it off |
