@@ -31,7 +31,10 @@ let it sleep, so the cause stays open; cutting the power avoids it.
 4. If the TV is not reachable or shows no picture after 3 minutes, a
    notification "Fernseher" appears in Home Assistant.
 
-When the plug is on already, step 1 and the POWER key are skipped.
+When the plug is on already, step 1 is skipped. The POWER key is sent only
+after a cold start: the plug was off, or it turned on less than 150 s ago.
+The button on the plug switches the plug on before the script starts, so a
+check for "off" alone missed that case (2026-10-19).
 
 **Fernsehen aus** (script "Fernsehen ausschalten"):
 
@@ -87,6 +90,37 @@ the like still go to it. The switch "Fernsehen" is exposed for the LLM
 assistant and other wording; the plug "Steckdose Fernseher" is not exposed,
 so nobody cuts the power of a running TV by voice.
 
+## Apps
+
+"Starte Netflix" (also "öffne …", "… starten", "mach … an", optionally "auf
+dem Fernseher") works for Netflix, YouTube, Disney+ (also "Disney Plus") and
+Prime Video (also "Amazon Prime"). The automation "Fernseher App per
+Sprache" answers "Netflix startet." or, with the TV off, "Der Fernseher
+startet mit Netflix, das dauert etwa eine Minute.", and runs the script
+"Fernseher App starten". The script switches the TV on through the event
+`tv_power_request` when needed, waits for "Fernsehen einschalten" to finish,
+and starts the app with `media_player.play_media` (`media_content_type:
+app`). Only these four names have sentences, so "starte einen Timer" still
+reaches the built-in intents.
+
+The script is exposed to Assist, so the LLM assistant can call it for other
+wording; its field `app` takes one of the four names.
+
+The Android TV Remote integration has the four apps in its options (Settings
+→ Devices & services → Android TV Remote → Configure), so the media player
+and the wall display show their names:
+
+| Name | App id |
+|---|---|
+| Netflix | `com.netflix.ninja` |
+| YouTube | `com.google.android.youtube.tv` |
+| Disney+ | `com.disney.disneyplus` |
+| Prime Video | `com.amazon.amazonvideo.livingroom` |
+
+For the local pipeline, `compose/jetson/custom_sentences/de/tv_apps.yaml`
+teaches Speech-to-Phrase the same sentences; deploy it as described in
+`docs/jetson_setup.md` (custom sentences), which needs sudo on the Jetson.
+
 ## Entities
 
 | Entity | Name | Purpose |
@@ -94,6 +128,8 @@ so nobody cuts the power of a running TV by voice.
 | `switch.tv_power` | Fernsehen | On/off for dashboards and Assist (template helper) |
 | `script.tv_power_on` | Fernsehen einschalten | Power on, boot, picture |
 | `script.tv_power_off` | Fernsehen ausschalten | TV off, wait, power off |
+| `script.tv_launch_app` | Fernseher App starten | TV on when needed, then start an app (exposed to Assist) |
+| `automation.tv_power_app_voice` | Fernseher App per Sprache | Voice sentences for the four apps |
 | `automation.tv_power_command` | Fernsehen an oder aus | Runs the scripts for the voice sentences and the event `tv_power_request` from the switch |
 | `automation.tv_power_auto_off` | Fernseher nach dem Ausschalten stromlos schalten | Power off 5 minutes after the TV went off |
 | `automation.tv_power_plug_button` | Fernseher über die Steckdosentaste einschalten | Button on the plug |
@@ -187,6 +223,7 @@ the files in the repository are copies.
 |---|---|
 | Notification "nicht erreichbar" | The TV did not come up on the network; check the plug and the TV's network connection |
 | Notification "ließ sich nicht einschalten" | The POWER key and turn on had no effect within 3 minutes; check the trace of "Fernsehen einschalten" |
+| "Starte Netflix" switches the TV on but the app does not open | The app id is not installed on the TV; check the trace of "Fernseher App starten" and the app id in the table above |
 | "Fernsehen einschalten" stops with "Unauthorized" | It was started directly by a user without admin rights; start it through the switch, the event `tv_power_request` or the voice |
 | The TV shuts down while someone watches | Android TV lost the TV and the plug reads less than 40 W, or the update window ended; check the trace of the automation that ran |
 | The plug stays on after the TV went off | A script was running when the TV went off, or the update window was on; the next "aus" turns it off |

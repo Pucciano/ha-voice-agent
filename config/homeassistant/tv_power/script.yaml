@@ -41,13 +41,19 @@ tv_power_on:
     picture_w: 45
     mount_select: ""
     mount_view_preset: Fernsehen
-    cold: "{{ is_state(plug, 'off') }}"
+    # A cold start: the plug is off, or it turned on less than 150 s ago.
+    # The button on the plug switches it on before this script starts
+    # (2026-10-19: with only "off" counted, the run took the "on" without a
+    # picture for real and ended).
+    cold: >-
+      {{ is_state(plug, 'off')
+         or now() - states[plug].last_changed < timedelta(seconds=150) }}
     quirk_done: false
   sequence:
     - action: script.turn_off
       target:
         entity_id: script.tv_power_off
-    - if: "{{ cold }}"
+    - if: "{{ is_state(plug, 'off') }}"
       then:
         - action: switch.turn_on
           target:
@@ -184,3 +190,4 @@ tv_power_off:
     - action: switch.turn_off
       target:
         entity_id: "{{ plug }}"
+
