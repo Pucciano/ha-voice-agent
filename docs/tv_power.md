@@ -100,15 +100,28 @@ startet mit Netflix, das dauert etwa eine Minute.", and runs the script
 "Fernseher App starten". The script switches the TV on through the event
 `tv_power_request` when needed, waits for "Fernsehen einschalten" to finish,
 and starts the app with `media_player.play_media` (`media_content_type:
-app`). Only these four names have sentences, so "starte einen Timer" still
-reaches the built-in intents.
+app`) and a deep link. Only these four names have sentences, so "starte
+einen Timer" still reaches the built-in intents. Voxtral may write "Startet
+Netflix.", so the sentences accept "startet" too.
+
+The package ids do not start the apps on this TV (`com.netflix.ninja` left
+the TV on its home screen, also when retried a minute later); the
+androidtv_remote docs blame a Google Play Store change and recommend deep
+links. The script uses these:
+
+| App | Deep link | Checked |
+|---|---|---|
+| Netflix | `netflix://` | Opened Netflix within 2 s (2026-10-19) |
+| YouTube | `https://www.youtube.com` | From the docs, not yet |
+| Disney+ | `https://www.disneyplus.com` | From the docs, not yet |
+| Prime Video | `https://app.primevideo.com` | From the docs, not yet |
 
 The script is exposed to Assist, so the LLM assistant can call it for other
 wording; its field `app` takes one of the four names.
 
-The Android TV Remote integration has the four apps in its options (Settings
-→ Devices & services → Android TV Remote → Configure), so the media player
-and the wall display show their names:
+The Android TV Remote integration has the four apps with their package ids
+in its options (Settings → Devices & services → Android TV Remote →
+Configure), so the media player and the wall display show their names:
 
 | Name | App id |
 |---|---|
@@ -223,7 +236,7 @@ the files in the repository are copies.
 |---|---|
 | Notification "nicht erreichbar" | The TV did not come up on the network; check the plug and the TV's network connection |
 | Notification "ließ sich nicht einschalten" | The POWER key and turn on had no effect within 3 minutes; check the trace of "Fernsehen einschalten" |
-| "Starte Netflix" switches the TV on but the app does not open | The app id is not installed on the TV; check the trace of "Fernseher App starten" and the app id in the table above |
+| "Starte Netflix" switches the TV on but the app does not open | The deep link does not open the app on this TV; check the trace of "Fernseher App starten" and try another link from the androidtv_remote docs with `media_player.play_media` |
 | "Fernsehen einschalten" stops with "Unauthorized" | It was started directly by a user without admin rights; start it through the switch, the event `tv_power_request` or the voice |
 | The TV shuts down while someone watches | Android TV lost the TV and the plug reads less than 40 W, or the update window ended; check the trace of the automation that ran |
 | The plug stays on after the TV went off | A script was running when the TV went off, or the update window was on; the next "aus" turns it off |

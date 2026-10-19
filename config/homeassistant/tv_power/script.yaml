@@ -217,15 +217,19 @@ tv_launch_app:
             - Prime Video
   variables:
     tv: media_player.sony_xr_65x90k_2
-    apps:
-      Netflix: com.netflix.ninja
-      YouTube: com.google.android.youtube.tv
-      Disney+: com.disney.disneyplus
-      Prime Video: com.amazon.amazonvideo.livingroom
-    app_id: "{{ apps.get(app, '') }}"
+    # Deep links, not package ids: launching com.netflix.ninja did nothing on
+    # this TV (a Google Play Store change, see the androidtv_remote docs),
+    # netflix:// opened Netflix within 2 s (2026-10-19). The other three are
+    # the links from the androidtv_remote docs.
+    links:
+      Netflix: netflix://
+      YouTube: https://www.youtube.com
+      Disney+: https://www.disneyplus.com
+      Prime Video: https://app.primevideo.com
+    link: "{{ links.get(app, '') }}"
   sequence:
     - condition: template
-      value_template: "{{ app_id != '' }}"
+      value_template: "{{ link != '' }}"
     - if: "{{ not is_state('switch.tv_power', 'on') or is_state('script.tv_power_on', 'on') }}"
       then:
         - if: "{{ not is_state('script.tv_power_on', 'on') }}"
@@ -246,4 +250,4 @@ tv_launch_app:
         entity_id: "{{ tv }}"
       data:
         media_content_type: app
-        media_content_id: "{{ app_id }}"
+        media_content_id: "{{ link }}"
