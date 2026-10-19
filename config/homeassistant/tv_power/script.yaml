@@ -207,11 +207,15 @@ tv_power_off:
 #   system dialog (2026-10-19). So after the launch the foreground app must
 #   be the expected package within 8 s; otherwise BACK closes what opened,
 #   and a notification says so.
-# - Disney+ and Prime Video stay out until their links are checked against
+# - The TV's remote service only opens links (an implicit VIEW intent);
+#   intent: URIs with an explicit package did nothing (2026-10-19), so an
+#   app cannot be named as on a phone. Only Netflix is in, by its own
+#   scheme, which no https handler can claim. YouTube (https link),
+#   Disney+ and Prime Video stay out until their links are checked against
 #   the apps' intent filters on the TV (docs/tv_power.md).
 tv_launch_app:
   alias: Fernseher App starten
-  description: Schaltet den Fernseher bei Bedarf ein und startet Netflix oder YouTube.
+  description: Schaltet den Fernseher bei Bedarf ein und startet Netflix.
   icon: mdi:television-play
   mode: restart
   fields:
@@ -224,19 +228,15 @@ tv_launch_app:
         select:
           options:
             - Netflix
-            - YouTube
   variables:
     tv: media_player.sony_xr_65x90k_2
     remote: remote.sony_xr_65x90k
-    # Checked on this TV on 2026-10-19: each opened its app directly, without
-    # a chooser. Package ids (market://launch?id=…) do nothing here.
+    # Checked on this TV on 2026-10-19: netflix:// opened Netflix directly.
+    # Package ids (market://launch?id=…) and intent: URIs do nothing here.
     apps:
       Netflix:
         link: netflix://
         package: com.netflix.ninja
-      YouTube:
-        link: https://www.youtube.com
-        package: com.google.android.youtube.tv
     entry: "{{ apps.get(app, {}) }}"
   sequence:
     - condition: template

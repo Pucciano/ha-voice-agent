@@ -68,7 +68,7 @@
                 - set_conversation_response: Der Fernseher wird ausgeschaltet.
 
 # "Starte Netflix" and the like: script.tv_launch_app switches the TV on
-# when needed and starts the app (Netflix and YouTube for now). Only these
+# when needed and starts the app (only Netflix for now). Only these
 # four names, so the sentences cannot catch "starte einen Timer". The trigger id is the app's name in the
 # script. "Disney+" also comes as "Disney Plus" from speech recognition, and
 # Voxtral wrote "Hey AIVI, starte Netflix" as "Startet Netflix." and "… starte
@@ -105,10 +105,10 @@
   actions:
     - variables:
         already_on: "{{ is_state('switch.tv_power', 'on') }}"
-        # The apps of script.tv_launch_app; keep both in step. Disney+ and
-        # Prime Video keep their sentences, so they get an answer instead of
-        # going to the LLM, until their links are checked.
-        ready: "{{ trigger.id in ['Netflix', 'YouTube'] }}"
+        # The apps of script.tv_launch_app; keep both in step. The others
+        # keep their sentences, so they get an answer instead of going to
+        # the LLM, until their links are checked.
+        ready: "{{ trigger.id in ['Netflix'] }}"
     - if: "{{ ready }}"
       then:
         - action: script.turn_on

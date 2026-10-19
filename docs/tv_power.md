@@ -93,21 +93,22 @@ so nobody cuts the power of a running TV by voice.
 ## Apps
 
 "Starte Netflix" (also "öffne …", "… starten", "mach … an", optionally "ich"
-in front or "auf dem Fernseher" at the end) starts Netflix or YouTube. The
+in front or "auf dem Fernseher" at the end) starts Netflix. The
 automation "Fernseher App per Sprache" answers "Netflix startet." or, with
 the TV off, "Der Fernseher startet mit Netflix, das dauert etwa eine
 Minute.", and runs the script "Fernseher App starten". The script switches
 the TV on through the event `tv_power_request` when needed, waits for
 "Fernsehen einschalten" to finish, and opens the app with
 `media_player.play_media` (`media_content_type: app`) and a deep link.
-Disney+ and Prime Video have sentences too, but only answer "… kann ich auf
-dem Fernseher noch nicht starten." until their links are checked (below).
+YouTube, Disney+ and Prime Video have sentences too, but only answer "… kann
+ich auf dem Fernseher noch nicht starten." until their links are checked
+(below).
 Only these four names have sentences, so "starte einen Timer" still reaches
 the built-in intents. Voxtral wrote "Startet Netflix." and "Ich starte
 YouTube.", hence "startet" and the optional "ich".
 
 The script is exposed to Assist, so the LLM assistant can call it for other
-wording; its field `app` takes "Netflix" or "YouTube".
+wording; its field `app` takes only "Netflix".
 
 ### Links and safety
 
@@ -131,13 +132,23 @@ link a browser can open a website instead of the app. So:
 |---|---|---|
 | Netflix | `netflix://` | Opens Netflix within 2 s; used |
 | Netflix | `com.netflix.ninja` (package id) | Nothing, home screen stays |
-| YouTube | `https://www.youtube.com` | Opens YouTube directly, no chooser; used |
+| Netflix | `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LEANBACK_LAUNCHER;package=com.netflix.ninja;end` | Nothing, home screen stays |
+| Netflix | `intent://#Intent;scheme=netflix;package=com.netflix.ninja;end` | Nothing, home screen stays |
+| YouTube | `https://www.youtube.com` | Opens YouTube directly, no chooser; not used, as an https link can be claimed by a browser |
 | YouTube | `vnd.youtube://` | System dialog (`app_id` "android"), closed with BACK |
 | Disney+ | `https://www.disneyplus.com` | "Open with" web or app; closed with BACK; not used |
 | Prime Video | `https://app.primevideo.com` | Not tried; not used |
 
-Before Disney+ and Prime Video get a link, check which app resolves it on
-the TV instead of trying links: with ADB debugging switched on in the TV's
+An app cannot be named the way a phone does it (an explicit intent with the
+package): the TV's remote service only opens links, an implicit VIEW intent
+that Android resolves by the apps' intent filters, and the `intent:` URIs
+above did nothing. So the rule is: no https links; only a scheme of the app
+itself, and the foreground check after the launch. Netflix's `netflix://` is
+the only such link checked so far. Launching by package would need ADB
+(`am start` with the package) and ADB debugging left on, which is postponed.
+
+Before YouTube, Disney+ and Prime Video get a link, check which app resolves
+it on the TV instead of trying links: with ADB debugging switched on in the TV's
 developer options, `adb shell cmd package query-activities -a
 android.intent.action.VIEW -d <link>` lists every app that would open the
 link, and `adb shell dumpsys package <package>` shows the app's intent
@@ -166,7 +177,7 @@ teaches Speech-to-Phrase the same sentences; deploy it as described in
 | `switch.tv_power` | Fernsehen | On/off for dashboards and Assist (template helper) |
 | `script.tv_power_on` | Fernsehen einschalten | Power on, boot, picture |
 | `script.tv_power_off` | Fernsehen ausschalten | TV off, wait, power off |
-| `script.tv_launch_app` | Fernseher App starten | TV on when needed, then start Netflix or YouTube by a checked link (exposed to Assist) |
+| `script.tv_launch_app` | Fernseher App starten | TV on when needed, then start Netflix by its checked link (exposed to Assist) |
 | `automation.tv_power_app_voice` | Fernseher App per Sprache | Voice sentences for the four apps |
 | `automation.tv_power_command` | Fernsehen an oder aus | Runs the scripts for the voice sentences and the event `tv_power_request` from the switch |
 | `automation.tv_power_auto_off` | Fernseher nach dem Ausschalten stromlos schalten | Power off 5 minutes after the TV went off |
