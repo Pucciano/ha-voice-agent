@@ -5,13 +5,23 @@
 # The scripts (script.yaml) do the work; these automations only decide when
 # to run them. They start the scripts without waiting.
 
-# Voice. Sentence triggers win over the built-in intents, so "schalte den
-# Fernseher an" runs the power-on script instead of turn_on on the media
-# player, which cannot reach a TV without power. The media player keeps the
-# name "Fernseher" for pause, volume and the like.
-- id: tv_power_voice
-  alias: Fernsehen per Sprache
-  description: Startet "Fernsehen einschalten" oder "Fernsehen ausschalten", wenn jemand den Fernseher per Sprache an- oder ausschaltet.
+# The one entry point for "Fernsehen an/aus": voice and the switch
+# "Fernsehen" (switch.tv_power, which fires the event tv_power_request).
+#
+# The scripts must not run with the rights of the person or display that
+# asked: reloading androidtv_remote needs an admin, and the wall display
+# logs in as a user without admin rights (on 2026-10-19 a tap on the display
+# stopped "Fernsehen einschalten" with "Unauthorized"). An automation run has
+# a context without a user, so the scripts it starts may reload the
+# integration.
+#
+# Sentence triggers win over the built-in intents, so "schalte den Fernseher
+# an" runs the power-on script instead of turn_on on the media player, which
+# cannot reach a TV without power. The media player keeps the name
+# "Fernseher" for pause, volume and the like.
+- id: tv_power_command
+  alias: Fernsehen an oder aus
+  description: Startet "Fernsehen einschalten" oder "Fernsehen ausschalten" für Sprachbefehle und den Schalter "Fernsehen".
   mode: queued
   triggers:
     - trigger: conversation
@@ -24,6 +34,16 @@
         - "[schalte|schalt|mach] [den] Fernseher aus"
         - "[schalte|schalt|mach] [das] Fernsehen aus"
       id: "off"
+    - trigger: event
+      event_type: tv_power_request
+      event_data:
+        action: "on"
+      id: "on"
+    - trigger: event
+      event_type: tv_power_request
+      event_data:
+        action: "off"
+      id: "off"
   actions:
     - choose:
         - conditions: "{{ trigger.id == 'on' }}"
@@ -33,15 +53,19 @@
             - action: script.turn_on
               target:
                 entity_id: script.tv_power_on
-            - set_conversation_response: >-
-                {{ 'Der Fernseher ist schon an.' if already_on
-                   else 'Der Fernseher startet, das dauert knapp eine Minute.' }}
+            - if: "{{ trigger.platform == 'conversation' }}"
+              then:
+                - set_conversation_response: >-
+                    {{ 'Der Fernseher ist schon an.' if already_on
+                       else 'Der Fernseher startet, das dauert knapp eine Minute.' }}
         - conditions: "{{ trigger.id == 'off' }}"
           sequence:
             - action: script.turn_on
               target:
                 entity_id: script.tv_power_off
-            - set_conversation_response: Der Fernseher wird ausgeschaltet.
+            - if: "{{ trigger.platform == 'conversation' }}"
+              then:
+                - set_conversation_response: Der Fernseher wird ausgeschaltet.
 
 # Switched off with the TV's own remote (or anything else): the plug follows
 # after 5 minutes. The power check keeps a TV with a picture powered even

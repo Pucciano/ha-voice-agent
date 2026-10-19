@@ -22,21 +22,34 @@ schedule:
 
 # Template helper (config flow "Template" -> "Switch"). On while the TV
 # starts or shows a picture; off while it shuts down or has no power.
+#
+# After a cold start the TV reports "on" without a picture for about 110 s,
+# so within 150 s after the plug turned on "on" counts only with a picture
+# (45 W or more). Later a dark scene with less power still counts as on.
+#
+# The actions only fire tv_power_request; automation.tv_power_command runs
+# the scripts without the rights of the user who switched (see
+# automation.yaml).
 template:
   - switch:
       - name: Fernsehen
         unique_id: tv_power
         icon: mdi:television
         state: >-
+          {%- set plug = states.switch.living_room_lowboard_tv_plug -%}
+          {%- set settled = plug is not none
+                and now() - plug.last_changed > timedelta(seconds=150) -%}
           {{ is_state('script.tv_power_on', 'on')
              or (is_state('switch.living_room_lowboard_tv_plug', 'on')
                  and is_state('media_player.sony_xr_65x90k_2', 'on')
-                 and not is_state('script.tv_power_off', 'on')) }}
+                 and not is_state('script.tv_power_off', 'on')
+                 and (settled
+                      or states('sensor.living_room_lowboard_tv_plug_power') | float(0) >= 45)) }}
         turn_on:
-          - action: script.turn_on
-            target:
-              entity_id: script.tv_power_on
+          - event: tv_power_request
+            event_data:
+              action: "on"
         turn_off:
-          - action: script.turn_on
-            target:
-              entity_id: script.tv_power_off
+          - event: tv_power_request
+            event_data:
+              action: "off"

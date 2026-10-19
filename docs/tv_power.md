@@ -52,13 +52,28 @@ When the plug is on already, step 1 and the POWER key are skipped.
 The TV's own remote cannot switch on a TV without power. Use the voice, the
 switch "Fernsehen", or the button on the plug.
 
+The switch "Fernsehen" does not run the scripts itself: it fires the event
+`tv_power_request` (`action: on` or `off`), and the automation "Fernsehen an
+oder aus" runs them. A script started directly by a user runs with that
+user's rights, and reloading the Android TV Remote integration needs an
+admin; the wall display logs in as a user without admin rights. On
+2026-10-19 a tap on the display therefore stopped "Fernsehen einschalten"
+with "Unauthorized" after the plug had turned on, and the TV stayed in its
+"on" without a picture until it settled to standby. An automation runs
+without a user, so this path works for every user.
+
+The switch is on while "Fernsehen einschalten" runs, and while the TV is on
+with power, unless "Fernsehen ausschalten" runs. Within 150 s after the plug
+turned on, "on" counts only with a picture (45 W or more), so the "on"
+without a picture after a cold start never shows as on.
+
 The update window is off by default. Without it the TV installs software
 and app updates only while someone watches, or when they are started by
 hand in the TV's settings.
 
 ## Voice
 
-Sentence triggers of the automation "Fernsehen per Sprache" catch these
+Sentence triggers of the automation "Fernsehen an oder aus" catch these
 sentences before the built-in intents:
 
 - "[schalte|schalt|mach] [den] Fernseher (an|ein)"
@@ -79,7 +94,7 @@ so nobody cuts the power of a running TV by voice.
 | `switch.tv_power` | Fernsehen | On/off for dashboards and Assist (template helper) |
 | `script.tv_power_on` | Fernsehen einschalten | Power on, boot, picture |
 | `script.tv_power_off` | Fernsehen ausschalten | TV off, wait, power off |
-| `automation.tv_power_voice` | Fernsehen per Sprache | Voice sentences |
+| `automation.tv_power_command` | Fernsehen an oder aus | Runs the scripts for the voice sentences and the event `tv_power_request` from the switch |
 | `automation.tv_power_auto_off` | Fernseher nach dem Ausschalten stromlos schalten | Power off 5 minutes after the TV went off |
 | `automation.tv_power_plug_button` | Fernseher über die Steckdosentaste einschalten | Button on the plug |
 | `automation.tv_power_update_window` | Fernseher Updatefenster | Weekly update window |
@@ -172,6 +187,7 @@ the files in the repository are copies.
 |---|---|
 | Notification "nicht erreichbar" | The TV did not come up on the network; check the plug and the TV's network connection |
 | Notification "ließ sich nicht einschalten" | The POWER key and turn on had no effect within 3 minutes; check the trace of "Fernsehen einschalten" |
+| "Fernsehen einschalten" stops with "Unauthorized" | It was started directly by a user without admin rights; start it through the switch, the event `tv_power_request` or the voice |
 | The TV shuts down while someone watches | Android TV lost the TV and the plug reads less than 40 W, or the update window ended; check the trace of the automation that ran |
 | The plug stays on after the TV went off | A script was running when the TV went off, or the update window was on; the next "aus" turns it off |
 | The button on the plug switches only the plug | The automation ignores changes from the app and dashboards (user context), while "Fernsehen einschalten" runs, and for a minute after the update window switched the plug |
