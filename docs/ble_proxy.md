@@ -43,10 +43,13 @@ Uses in the living room:
   bookworm's BlueZ 5.66, which runs on the 4.9 kernel (management interface
   1.14).
 - Kernel 4.9 has no advertisement monitor, so the Jetson scans actively
-  only. It also filters duplicate advertisements in the controller: 37–42
-  addresses gave about 4 advertisements per second, but each device only one
-  every 6 to 8 s. Enough to see whether a phone is home, thin for Bermuda's
-  room tracking. A kernel from 5.10 (Raspberry Pi OS) scans passively.
+  only. It also filters duplicate advertisements in the controller until
+  discovery restarts, about every 10 s: 37–42 addresses gave about 4
+  advertisements per second, but each device only one every 6 to 8 s, and
+  Home Assistant's interval tracker measured 11 to 66 s per device (median
+  16 s over 29 devices, the mount 12 s). Enough to see whether a phone is
+  home, thin for Bermuda's room tracking. A kernel from 5.10 (Raspberry Pi
+  OS) scans passively.
 - The 4.9 kernel refuses an LE connection while discovery runs
   (`Operation already in progress`). The proxy pauses the scanner while it
   connects, as an ESP32 proxy does. Measured: connect to the mount in 4.9 s,
