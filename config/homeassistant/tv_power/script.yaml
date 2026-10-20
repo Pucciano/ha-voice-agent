@@ -25,7 +25,8 @@
 # vogels_motion_mount_ble. Measured on 2026-10-20: a preset command needs 4-6 s
 # for the connection and the PIN, wall to "Esstisch" (the farthest preset)
 # took 32 s, back 25 s. After its power returns, the mount is available again
-# once Home Assistant hears it. An empty `mount_select` skips its steps.
+# once Home Assistant hears it. script.tv_mount_move drives it; an empty
+# `mount_view_preset` keeps it where it is when the TV starts.
 
 tv_power_on:
   alias: Fernsehen einschalten
@@ -42,10 +43,9 @@ tv_power_on:
     tv: media_player.sony_xr_65x90k_2
     remote: remote.sony_xr_65x90k
     picture_w: 45
-    mount_select: select.wohnung_wohnzimmer_tv_halterung_aktuelles_preset
     mount_view_preset: Couch
-    # The mount boots with the TV; on a cold start the picture comes first.
-    mount_ready_timeout_s: 90
+    # "Fernseher ausrichten" asks for another position when it starts the TV.
+    mount_position: "{{ requested_mount_position | default('', true) or mount_view_preset }}"
     # A cold start: the plug is off, or it turned on less than 150 s ago.
     # The button on the plug switches it on before this script starts
     # (2026-10-19: with only "off" counted, the run took the "on" without a
@@ -132,17 +132,16 @@ tv_power_on:
     - action: persistent_notification.dismiss
       data:
         notification_id: tv_power_on_failed
-    - if: "{{ mount_select != '' }}"
+    # Started, not awaited: the mount boots with the TV and may take a while
+    # to be reachable, and "Fernseher App starten" waits for this script.
+    - if: "{{ mount_position != '' }}"
       then:
-        - wait_template: "{{ not is_state(mount_select, 'unavailable') }}"
-          timeout: "{{ mount_ready_timeout_s }}"
-        # The TV is on; a mount that cannot be reached must not fail that.
-        - action: select.select_option
-          continue_on_error: true
+        - action: script.turn_on
           target:
-            entity_id: "{{ mount_select }}"
+            entity_id: script.tv_mount_move
           data:
-            option: "{{ mount_view_preset }}"
+            variables:
+              position: "{{ mount_position }}"
 
 tv_power_off:
   alias: Fernsehen ausschalten
@@ -159,27 +158,19 @@ tv_power_off:
     power_max_age_s: 30
     # Wait between standby and the power cut.
     settle_s: 60
-    mount_select: select.wohnung_wohnzimmer_tv_halterung_aktuelles_preset
-    mount_distance: number.wohnung_wohnzimmer_tv_halterung_distance
-    # "0" is the mount's default position, flat at the wall.
-    mount_wall_preset: "0"
-    # The mount's power supply hangs on the plug, so the power goes only
-    # once it is at the wall, or after this long.
-    mount_travel_timeout_s: 60
   sequence:
     - action: script.turn_off
       target:
         entity_id: script.tv_power_on
-    - if: "{{ mount_select != '' }}"
-      then:
-        - action: select.select_option
-          continue_on_error: true
-          target:
-            entity_id: "{{ mount_select }}"
-          data:
-            option: "{{ mount_wall_preset }}"
-        - wait_template: "{{ states(mount_distance) | int(-1) == 0 }}"
-          timeout: "{{ mount_travel_timeout_s }}"
+    # The mount's power supply hangs on the plug, so the power goes only once
+    # it is at the wall, or after tv_mount_move gave up. A mount that cannot
+    # be reached at once is not waited for long.
+    - action: script.tv_mount_move
+      continue_on_error: true
+      data:
+        position: Wand
+        wait: true
+        ready_timeout: 15
     - if: "{{ is_state(tv, 'on') }}"
       then:
         - action: media_player.turn_off
@@ -316,3 +307,146 @@ tv_launch_app:
               Das wurde mit Zurück geschlossen.
         - stop: The app link opened something else.
           error: true
+
+# Drives the mount, nothing else; tv_power_on, tv_power_off and
+# tv_mount_position use it. Not exposed to Assist.
+#
+# The mount numbers its presets, and the integration has one button per
+# preset. The buttons are used instead of the preset select: the mount calls
+# a preset "Esstisch " with a trailing space, which no template keeps. Before
+# a press, the preset name at that place must still match, so a preset moved
+# or renamed in the Vogel's app (only possible with the supervisor PIN) never
+# sends the TV elsewhere.
+tv_mount_move:
+  alias: Fernsehhalterung fahren
+  description: Fährt die TV-Halterung zur Couch, zum Esstisch, zur Ottomane oder an die Wand, ohne den Fernseher zu schalten.
+  icon: mdi:television-guide
+  mode: restart
+  fields:
+    position:
+      name: Position
+      description: Couch, Esstisch, Ottomane oder Wand.
+      required: true
+      example: Couch
+      selector:
+        select:
+          options:
+            - Couch
+            - Esstisch
+            - Ottomane
+            - Wand
+    wait:
+      name: Warten
+      description: Erst enden, wenn die Halterung angekommen ist (höchstens 60 s).
+      selector:
+        boolean:
+    ready_timeout:
+      name: Wartezeit auf die Halterung
+      description: Sekunden, die auf eine nicht erreichbare Halterung gewartet wird (Standard 90).
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: s
+  variables:
+    mount_select: select.wohnung_wohnzimmer_tv_halterung_aktuelles_preset
+    mount_distance: number.wohnung_wohnzimmer_tv_halterung_distance
+    # option: place in the select's options; name: the mount's preset name
+    # there, without surrounding spaces ("0" is the default position, flat at
+    # the wall).
+    positions:
+      Couch:
+        option: 1
+        name: Couch
+        button: button.wohnung_wohnzimmer_tv_halterung_select_preset_0
+      Esstisch:
+        option: 2
+        name: Esstisch
+        button: button.wohnung_wohnzimmer_tv_halterung_select_preset_1
+      Ottomane:
+        option: 3
+        name: Ottomane
+        button: button.wohnung_wohnzimmer_tv_halterung_select_preset_2
+      Wand:
+        option: 0
+        name: "0"
+        button: button.wohnung_wohnzimmer_tv_halterung_select_default_preset
+    entry: "{{ positions.get(position, {}) }}"
+    wait_for_arrival: "{{ wait | default(false) | bool }}"
+    ready_s: "{{ ready_timeout | default(90) | int }}"
+  sequence:
+    - condition: template
+      value_template: "{{ entry.button is defined }}"
+    - wait_template: "{{ not is_state(entry.button, 'unavailable') }}"
+      timeout: "{{ ready_s }}"
+      continue_on_timeout: false
+    - if: >-
+        {{ ((state_attr(mount_select, 'options') or [])[entry.option] | default('') | trim)
+           != entry.name }}
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_mount_move_failed
+            title: TV-Halterung
+            message: >-
+              Das Preset {{ position }} steht in der Halterung nicht mehr an
+              Platz {{ entry.option }}; die Halterung bleibt stehen. Bitte
+              script.tv_mount_move anpassen.
+        - stop: The mount's presets changed.
+          error: true
+    - action: button.press
+      target:
+        entity_id: "{{ entry.button }}"
+    # At the wall the distance must be 0 exactly: the select already shows
+    # "0" two steps before.
+    - if: "{{ wait_for_arrival }}"
+      then:
+        - wait_template: >-
+            {{ (states(mount_distance) | int(-1) == 0) if position == 'Wand'
+               else ((states(mount_select) | trim) == entry.name) }}
+          timeout: 60
+
+# "Dreh den Fernseher zur Couch" and the like, also for the LLM assistant
+# (exposed to Assist). Switches the TV on when needed: then "Fernsehen an"
+# drives the mount to this position instead of "Couch". A TV without power
+# stands at the wall already.
+tv_mount_position:
+  alias: Fernseher ausrichten
+  description: Dreht den Fernseher zur Couch, zum Esstisch oder zur Ottomane oder fährt ihn an die Wand. Schaltet den Fernseher dafür bei Bedarf ein.
+  icon: mdi:television-guide
+  mode: restart
+  fields:
+    position:
+      name: Position
+      description: Wohin der Fernseher zeigen soll; Wand fährt ihn flach an die Wand.
+      required: true
+      example: Couch
+      selector:
+        select:
+          options:
+            - Couch
+            - Esstisch
+            - Ottomane
+            - Wand
+  sequence:
+    - condition: template
+      value_template: "{{ position in ['Couch', 'Esstisch', 'Ottomane', 'Wand'] }}"
+    - choose:
+        - conditions: >-
+            {{ not is_state('switch.tv_power', 'on')
+               and not is_state('script.tv_power_on', 'on') }}
+          sequence:
+            - condition: template
+              value_template: "{{ position != 'Wand' }}"
+            - event: tv_power_request
+              event_data:
+                action: "on"
+                mount_position: "{{ position }}"
+            - stop: Fernsehen an drives the mount.
+        - conditions: "{{ is_state('script.tv_power_on', 'on') }}"
+          sequence:
+            - wait_template: "{{ is_state('script.tv_power_on', 'off') }}"
+              timeout: 240
+    - action: script.tv_mount_move
+      data:
+        position: "{{ position }}"
