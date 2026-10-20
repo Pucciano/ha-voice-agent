@@ -182,8 +182,9 @@ config` or `docker inspect` on this project unfiltered: both print the key.
    Without discovery: add the ESPHome integration with `<jetson-ip>` and port
    6053.
 2. Vogel's mount: install `Nailik/vogels_motion_mount_ble` through HACS
-   (v0.1.8 installed 2026-10-20; v0.1.9 is a pre-release with PIN fixes),
-   restart Home Assistant. The mount is discovered by its service UUID
+   (v0.1.9, a pre-release: enable beta releases for the repository in
+   HACS; it fixes the permission checks of the multi PIN mode), restart Home
+   Assistant. The mount is discovered by its service UUID
    within seconds; name it "TV-Halterung" (not like an area) and enter its
    PIN. The TV must be on its plug, since the mount's power supply hangs on
    it.
@@ -199,6 +200,15 @@ config` or `docker inspect` on this project unfiltered: both print the key.
    Noise encrypted. Home Assistant keeps it in its config entries and
    backups, and admins can change the mount's PINs with the integration's
    `set_*_pin` actions.
+
+   Set up on 2026-10-20: multi mode, the supervisor PIN only in the Vogel's
+   app, Home Assistant with the user PIN and all six switches off. Home
+   Assistant then has control rights (`authentication` 1): it moves to the
+   presets and sets distance and rotation; preset, name, automove and PIN
+   entities are unavailable. Automove values the integration does not know
+   (14 was seen) stop its setup with `ValueError: … is not a valid
+   VogelsMotionMountAutoMoveType`; set automove in the app to an HDMI input
+   or off.
 3. Presence of the iPhones: the core integration **Private BLE Device** needs
    each phone's identity resolving key (IRK); its documentation describes how
    to get it. It gives a device tracker and a distance per phone. **Bermuda**
