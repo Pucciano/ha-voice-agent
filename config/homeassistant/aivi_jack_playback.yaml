@@ -19,8 +19,9 @@
 # - A person starts the paused input again (button, BluOS app, wall display):
 #   "Audioausgang" resumes. Restarts by "AIVI Klinkenausgang" for an answer,
 #   a timer gong or the self test resume nothing: their state change carries
-#   the automation's context, and the 15 s after it triggered are skipped in
-#   case the speaker reports late.
+#   the automation's context. A contextless restart within 15 s is skipped
+#   only if the paused state predates that run (a delayed speaker report).
+#   A new manual pause after the run can be resumed immediately.
 #
 # "AIVI Klinkenausgang freigeben" (aivi_jack_release.yaml) stops the input
 # only after "Audioausgang" has been idle for 10 minutes, so it pauses
@@ -105,7 +106,9 @@ actions:
             value_template: >-
               {%- set last = state_attr(jack_automation, 'last_triggered') -%}
               {{ trigger.to_state.context.parent_id is none
-                 and (last is none or now() - last > timedelta(seconds=15)) }}
+                 and (last is none
+                      or trigger.from_state.last_changed > last
+                      or trigger.to_state.last_changed - last > timedelta(seconds=15)) }}
           - condition: template
             value_template: "{{ states(player) not in ['playing', 'buffering', 'unavailable', 'unknown'] }}"
         sequence:

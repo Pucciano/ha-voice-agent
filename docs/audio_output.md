@@ -134,3 +134,19 @@ it sat stopped as long as before the failure; if it starts later than about
 3 seconds, switch BluOS `Amplifier Standby` off. Network answers still play
 nothing while the speaker is grouped with another room; the jack route takes
 the speaker out of its group.
+
+Offline playback-guard regression tests:
+`uvx --python 3.12 --with pyyaml==6.0.3 --with jinja2==3.1.6 --from pytest==8.3.5 pytest tests/homeassistant`
+The tests evaluate the shipped templates with controlled timestamps and
+contexts; the speaker's real state reporting still needs a live check.
+
+Live verification on 2026-10-20: deployed `aivi_jack_playback` through the HA
+config API, with a backup of the previous config. A quiet local Piper test
+recording on the ordinary media pipeline was paused from the real BluOS
+speaker; the satellite paused too. Manual speaker play resumed the satellite
+0.77 seconds after the output automation ran. A synthetic satellite wake
+event restarted only the speaker input and left the satellite paused.
+HA traces confirmed both the manual-resume action and the automatic-resume
+guard, without template errors. Both players were stopped and the original
+satellite volume restored afterwards. This does not verify Spotify/Sendspin
+or a physical wake phrase/button press.

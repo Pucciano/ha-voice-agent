@@ -293,7 +293,8 @@ music plays on unheard, and the next wake word, which restarts the paused
 input for the answer, brings it back. When a person starts the paused input
 again, `Audioausgang` resumes. Restarts by `AIVI Klinkenausgang` resume
 nothing: the speaker's state change carries the automation's context, and
-the 15 seconds after it triggered are skipped too.
+contextless restarts within 15 seconds are skipped only if the paused state
+predates that run. A manual pause after the run can be resumed immediately.
 
 How the Pulse Flex treats its analog input (BluOS 4.12, read from the
 speaker's settings):
