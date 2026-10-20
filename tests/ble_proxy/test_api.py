@@ -249,15 +249,56 @@ def test_gatt_error_carries_the_code() -> None:
     run(body)
 
 
-def test_peripheral_disconnect_reaches_the_client() -> None:
+async def connect_recording(api: APIClient, events: list) -> None:
+    """Connects and records connection states and slot lists in order."""
+
+    api.subscribe_bluetooth_connections_free(
+        lambda free, limit, allocated: events.append(("slots", list(allocated)))
+    )
+    await until(lambda: events)
+    await api.bluetooth_device_connect(
+        MOUNT,
+        lambda connected, mtu, error: events.append(
+            ("state", connected, error)
+        ),
+        feature_flags=FEATURES,
+        has_cache=False,
+        address_type=MOUNT_TYPE,
+        timeout=5,
+    )
+
+
+def test_peripheral_disconnect_comes_before_the_slot_update() -> None:
     async def body() -> None:
         async with running() as (port, backend, proxy):
             async with client(port) as api:
-                states = await connect(api)
+                events: list = []
+                await connect_recording(api, events)
                 backend.drop(MOUNT)
-                await until(lambda: len(states.seen) == 2)
+                await until(lambda: events[-1] == ("slots", []))
                 assert not proxy._connections
-        assert states.seen[1] == (False, 0, CONN_TERMINATE_PEER_USER)
+        # Home Assistant takes a slot list without a device it still thinks
+        # connected as a lost notification, so the disconnect comes first.
+        assert events == [
+            ("slots", []),
+            ("slots", [MOUNT]),
+            ("state", True, 0),
+            ("state", False, CONN_TERMINATE_PEER_USER),
+            ("slots", []),
+        ]
+
+    run(body)
+
+
+def test_disconnect_answers_before_the_slot_update() -> None:
+    async def body() -> None:
+        async with running() as (port, _backend, _proxy):
+            async with client(port) as api:
+                events: list = []
+                await connect_recording(api, events)
+                await api.bluetooth_device_disconnect(MOUNT)
+                await until(lambda: events[-1] == ("slots", []))
+        assert events[-2:] == [("state", False, 0), ("slots", [])]
 
     run(body)
 

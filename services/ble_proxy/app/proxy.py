@@ -282,12 +282,16 @@ class BluetoothProxy:  # pylint: disable=too-many-instance-attributes
         for session in self._slot_sessions:
             session.send(message)
 
-    def _release(self, conn: _Connection) -> bool:
-        """Frees the slot; False if it was already freed."""
+    def _release(self, conn: _Connection, message: Any) -> bool:
+        """Frees the slot and tells the owner first, then everyone the new
+        slot count; Home Assistant takes a slot list without a device it
+        still thinks connected as a lost notification. False if the slot
+        was already freed."""
 
         if self._connections.get(conn.address) is not conn:
             return False
         del self._connections[conn.address]
+        conn.owner.send(message)
         self._broadcast_slots()
         return True
 
@@ -356,8 +360,10 @@ class BluetoothProxy:  # pylint: disable=too-many-instance-attributes
             _LOGGER.info(
                 "Connect to %s failed: %s", format_address(address), err
             )
-            if self._release(conn):
-                conn.owner.send(_connection_message(address, error=err.code))
+            self._release(
+                conn,
+                _connection_message(address, connected=False, error=err.code),
+            )
             return
         if self._connections.get(address) is not conn:
             await self._quiet_disconnect(address)
@@ -372,11 +378,12 @@ class BluetoothProxy:  # pylint: disable=too-many-instance-attributes
         if conn is None or conn.owner is not session:
             session.send(_connection_message(address, connected=False))
             return
-        self._release(conn)
         if conn.task is not None and not conn.task.done():
             conn.task.cancel()
         await self._quiet_disconnect(address)
-        session.send(_connection_message(address, connected=False))
+        message = _connection_message(address, connected=False)
+        if not self._release(conn, message):
+            session.send(message)
 
     async def _quiet_disconnect(self, address: int) -> None:
         try:
@@ -389,8 +396,9 @@ class BluetoothProxy:  # pylint: disable=too-many-instance-attributes
         if conn is None or not conn.connected:
             return
         _LOGGER.info("%s disconnected (%#x)", format_address(address), reason)
-        if self._release(conn):
-            conn.owner.send(_connection_message(address, error=reason))
+        self._release(
+            conn, _connection_message(address, connected=False, error=reason)
+        )
 
     async def _clear_cache(self, session: Session, address: int) -> None:
         try:
