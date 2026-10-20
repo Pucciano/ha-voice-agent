@@ -119,16 +119,20 @@ Minute." It runs the script "Fernseher ausrichten", which is also exposed
 to Assist for the LLM assistant: with the TV off, it starts "Fernsehen an"
 through the event `tv_power_request` with the position, so the mount goes
 there instead of to "Couch". A TV without power stands at the wall already,
-so "Wand" then does nothing. Only the script is exposed, not the mount's own
-entities, so the LLM can choose one of the four positions but not set a
-distance or rotation.
+so "Wand" then does nothing. The script returns `ergebnis`, a sentence
+about what happened, so the LLM does not announce a drive that never came
+(it did once, before the script answered). Only the script is exposed, not
+the mount's own entities, so the LLM can choose one of the four positions
+but not set a distance or rotation.
 
 The script "Fernsehhalterung fahren" (`script.tv_mount_move`, not exposed)
 drives the mount for all of them. It presses the integration's preset
 buttons rather than the preset select, because the mount calls one preset
 "Esstisch " with a trailing space, which templates drop. Before a press it
 checks that the preset name at that place still matches; a preset moved or
-renamed in the Vogel's app stops it with a notification "TV-Halterung".
+renamed in the Vogel's app stops it with a notification "TV-Halterung". It
+does nothing while the TV plug is off: the mount has no power then, but its
+entities stayed available for at least 50 minutes after a power cut.
 Speech-to-Phrase learns all of these sentences from Home Assistant (see
 Deploy). Tested on 2026-10-20 with Piper recordings: all five came back word
 for word in 1.2-1.4 s, "Ottomane" as "Ottoman" and "wohin" as "wo hin",

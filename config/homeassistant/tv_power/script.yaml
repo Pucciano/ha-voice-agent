@@ -317,6 +317,10 @@ tv_launch_app:
 # a press, the preset name at that place must still match, so a preset moved
 # or renamed in the Vogel's app (only possible with the supervisor PIN) never
 # sends the TV elsewhere.
+#
+# Without power on the TV plug the mount is off, but its entities stay
+# available for a long time (still 50 minutes after a power cut on
+# 2026-10-20), so the plug decides.
 tv_mount_move:
   alias: Fernsehhalterung fahren
   description: Fährt die TV-Halterung zur Couch, zum Esstisch, zur Ottomane oder an die Wand, ohne den Fernseher zu schalten.
@@ -377,6 +381,9 @@ tv_mount_move:
   sequence:
     - condition: template
       value_template: "{{ entry.button is defined }}"
+    - condition: state
+      entity_id: switch.living_room_lowboard_tv_plug
+      state: "on"
     - wait_template: "{{ not is_state(entry.button, 'unavailable') }}"
       timeout: "{{ ready_s }}"
       continue_on_timeout: false
@@ -409,10 +416,12 @@ tv_mount_move:
 # "Dreh den Fernseher zur Couch" and the like, also for the LLM assistant
 # (exposed to Assist). Switches the TV on when needed: then "Fernsehen an"
 # drives the mount to this position instead of "Couch". A TV without power
-# stands at the wall already.
+# stands at the wall already. Each end returns `ergebnis`, so the LLM tells
+# what happened instead of guessing (on 2026-10-20 it announced a drive to
+# the wall that a TV without power never made).
 tv_mount_position:
   alias: Fernseher ausrichten
-  description: Dreht den Fernseher zur Couch, zum Esstisch oder zur Ottomane oder fährt ihn an die Wand. Schaltet den Fernseher dafür bei Bedarf ein.
+  description: Dreht den Fernseher zur Couch, zum Esstisch oder zur Ottomane oder fährt ihn an die Wand. Schaltet den Fernseher dafür bei Bedarf ein. Antwortet mit dem Ergebnis.
   icon: mdi:television-guide
   mode: restart
   fields:
@@ -428,21 +437,42 @@ tv_mount_position:
             - Esstisch
             - Ottomane
             - Wand
+  variables:
+    towards:
+      Couch: zur Couch
+      Esstisch: zum Esstisch
+      Ottomane: zur Ottomane
+      Wand: an die Wand
   sequence:
-    - condition: template
-      value_template: "{{ position in ['Couch', 'Esstisch', 'Ottomane', 'Wand'] }}"
+    - if: "{{ position not in towards }}"
+      then:
+        - variables:
+            result:
+              ergebnis: Diese Position gibt es nicht; möglich sind Couch, Esstisch, Ottomane und Wand.
+        - stop: Unknown position.
+          response_variable: result
     - choose:
         - conditions: >-
             {{ not is_state('switch.tv_power', 'on')
                and not is_state('script.tv_power_on', 'on') }}
           sequence:
-            - condition: template
-              value_template: "{{ position != 'Wand' }}"
+            # A condition here would only end this branch.
+            - if: "{{ position == 'Wand' }}"
+              then:
+                - variables:
+                    result:
+                      ergebnis: Der Fernseher ist aus und steht schon an der Wand.
+                - stop: The TV is off, so the mount is at the wall.
+                  response_variable: result
             - event: tv_power_request
               event_data:
                 action: "on"
                 mount_position: "{{ position }}"
+            - variables:
+                result:
+                  ergebnis: "Der Fernseher startet und dreht sich dann {{ towards[position] }}, das dauert gut eine Minute."
             - stop: Fernsehen an drives the mount.
+              response_variable: result
         - conditions: "{{ is_state('script.tv_power_on', 'on') }}"
           sequence:
             - wait_template: "{{ is_state('script.tv_power_on', 'off') }}"
@@ -450,3 +480,10 @@ tv_mount_position:
     - action: script.tv_mount_move
       data:
         position: "{{ position }}"
+    - variables:
+        result:
+          ergebnis: >-
+            {{ 'Der Fernseher fährt an die Wand.' if position == 'Wand'
+               else 'Der Fernseher dreht sich ' ~ towards[position] ~ '.' }}
+    - stop: Started.
+      response_variable: result
