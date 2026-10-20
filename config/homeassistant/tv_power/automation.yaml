@@ -1,0 +1,228 @@
+# Home Assistant automations: power the living room TV only while it is used.
+# Each one is deployed through the automation config API under its id; keep
+# this copy and Home Assistant in sync. See docs/tv_power.md.
+#
+# The scripts (script.yaml) do the work; these automations only decide when
+# to run them. They start the scripts without waiting.
+
+# The one entry point for "Fernsehen an/aus": voice and the switch
+# "Fernsehen" (switch.tv_power, which fires the event tv_power_request).
+#
+# The scripts must not run with the rights of the person or display that
+# asked: reloading androidtv_remote needs an admin, and the wall display
+# logs in as a user without admin rights (on 2026-10-19 a tap on the display
+# stopped "Fernsehen einschalten" with "Unauthorized"). An automation run has
+# a context without a user, so the scripts it starts may reload the
+# integration.
+#
+# Sentence triggers win over the built-in intents, so "schalte den Fernseher
+# an" runs the power-on script instead of turn_on on the media player, which
+# cannot reach a TV without power. The media player keeps the name
+# "Fernseher" for pause, volume and the like.
+- id: tv_power_command
+  alias: Fernsehen an oder aus
+  description: Startet "Fernsehen einschalten" oder "Fernsehen ausschalten" für Sprachbefehle und den Schalter "Fernsehen".
+  mode: queued
+  triggers:
+    - trigger: conversation
+      command:
+        - "[schalte|schalt|mach] [den] Fernseher (an|ein)"
+        - "[schalte|schalt|mach] [das] Fernsehen (an|ein)"
+      id: "on"
+    - trigger: conversation
+      command:
+        - "[schalte|schalt|mach] [den] Fernseher aus"
+        - "[schalte|schalt|mach] [das] Fernsehen aus"
+      id: "off"
+    - trigger: event
+      event_type: tv_power_request
+      event_data:
+        action: "on"
+      id: "on"
+    - trigger: event
+      event_type: tv_power_request
+      event_data:
+        action: "off"
+      id: "off"
+  actions:
+    - choose:
+        - conditions: "{{ trigger.id == 'on' }}"
+          sequence:
+            - variables:
+                already_on: "{{ is_state('switch.tv_power', 'on') }}"
+            - action: script.turn_on
+              target:
+                entity_id: script.tv_power_on
+            - if: "{{ trigger.platform == 'conversation' }}"
+              then:
+                - set_conversation_response: >-
+                    {{ 'Der Fernseher ist schon an.' if already_on
+                       else 'Der Fernseher startet, das dauert knapp eine Minute.' }}
+        - conditions: "{{ trigger.id == 'off' }}"
+          sequence:
+            - action: script.turn_on
+              target:
+                entity_id: script.tv_power_off
+            - if: "{{ trigger.platform == 'conversation' }}"
+              then:
+                - set_conversation_response: Der Fernseher wird ausgeschaltet.
+
+# "Starte Netflix" and the like: script.tv_launch_app switches the TV on
+# when needed and starts the app (only Netflix for now). Only these
+# four names, so the sentences cannot catch "starte einen Timer". The trigger id is the app's name in the
+# script. "Disney+" also comes as "Disney Plus" from speech recognition, and
+# Voxtral wrote "Hey AIVI, starte Netflix" as "Startet Netflix." and "… starte
+# YouTube" as "Ich starte YouTube." (2026-10-19).
+- id: tv_power_app_voice
+  alias: Fernseher App per Sprache
+  description: Startet Netflix, YouTube, Disney+ oder Prime Video auf dem Fernseher und schaltet ihn dafür bei Bedarf ein.
+  mode: queued
+  triggers:
+    - trigger: conversation
+      command:
+        - "[ich] (starte|startet|start|öffne) [bitte] [mir] Netflix [auf dem Fernseher]"
+        - "Netflix (starten|öffnen)"
+        - "(schalte|schalt|mach) Netflix (an|ein)"
+      id: Netflix
+    - trigger: conversation
+      command:
+        - "[ich] (starte|startet|start|öffne) [bitte] [mir] (YouTube|You Tube) [auf dem Fernseher]"
+        - "(YouTube|You Tube) (starten|öffnen)"
+        - "(schalte|schalt|mach) (YouTube|You Tube) (an|ein)"
+      id: YouTube
+    - trigger: conversation
+      command:
+        - "[ich] (starte|startet|start|öffne) [bitte] [mir] (Disney Plus|Disney+|Disneyplus|Disney) [auf dem Fernseher]"
+        - "(Disney Plus|Disney+|Disneyplus|Disney) (starten|öffnen)"
+        - "(schalte|schalt|mach) (Disney Plus|Disney+|Disneyplus|Disney) (an|ein)"
+      id: Disney+
+    - trigger: conversation
+      command:
+        - "[ich] (starte|startet|start|öffne) [bitte] [mir] (Prime Video|Amazon Prime [Video]|Amazon Video|Prime) [auf dem Fernseher]"
+        - "(Prime Video|Amazon Prime [Video]|Amazon Video|Prime) (starten|öffnen)"
+        - "(schalte|schalt|mach) (Prime Video|Amazon Prime [Video]|Amazon Video|Prime) (an|ein)"
+      id: Prime Video
+  actions:
+    - variables:
+        already_on: "{{ is_state('switch.tv_power', 'on') }}"
+        # The apps of script.tv_launch_app; keep both in step. The others
+        # keep their sentences, so they get an answer instead of going to
+        # the LLM, until their links are checked.
+        ready: "{{ trigger.id in ['Netflix'] }}"
+    - if: "{{ ready }}"
+      then:
+        - action: script.turn_on
+          target:
+            entity_id: script.tv_launch_app
+          data:
+            variables:
+              app: "{{ trigger.id }}"
+        - set_conversation_response: >-
+            {{ trigger.id ~ ' startet.' if already_on
+               else 'Der Fernseher startet mit ' ~ trigger.id ~ ', das dauert etwa eine Minute.' }}
+      else:
+        - set_conversation_response: "{{ trigger.id }} kann ich auf dem Fernseher noch nicht starten."
+
+# Switched off with the TV's own remote (or anything else): the plug follows
+# after 5 eligible minutes, including after a script or update window ends.
+# Keep the inhibitors in the trigger so their removal starts a new countdown.
+# Missing, invalid or stale power readings never count as standby. The power
+# check keeps a TV with a picture powered even when androidtv_remote has lost it.
+- id: tv_power_auto_off
+  alias: Fernseher nach dem Ausschalten stromlos schalten
+  description: Schaltet die Steckdose von Fernseher und Soundbar aus, wenn der Fernseher 5 Minuten aus ist.
+  mode: single
+  triggers:
+    - trigger: template
+      value_template: >-
+        {%- set power = states.sensor.living_room_lowboard_tv_plug_power -%}
+        {{ is_state('switch.living_room_lowboard_tv_plug', 'on')
+           and not is_state('media_player.sony_xr_65x90k_2', 'on')
+           and is_number(power.state)
+           and 0 <= power.state | float < 40
+           and now() - power.last_reported < timedelta(seconds=30)
+           and not is_state('script.tv_power_on', 'on')
+           and not is_state('script.tv_power_off', 'on')
+           and not (is_state('input_boolean.tv_update_window_enabled', 'on')
+                    and is_state('schedule.tv_update_window', 'on')) }}
+      for: "00:05:00"
+  conditions:
+    - condition: template
+      value_template: >-
+        {{ not is_state('script.tv_power_on', 'on')
+           and not is_state('script.tv_power_off', 'on') }}
+    - condition: template
+      value_template: >-
+        {{ not (is_state('input_boolean.tv_update_window_enabled', 'on')
+                and is_state('schedule.tv_update_window', 'on')) }}
+  actions:
+    - action: script.turn_on
+      target:
+        entity_id: script.tv_power_off
+
+# The button on the plug replaces the TV's remote, which cannot switch on a TV
+# without power. Only the button counts: a change from the app or a dashboard
+# carries a user_id, and the scripts and the update window turn the plug on
+# themselves. Their changes carry no parent_id (seen on 2026-10-18: the run
+# of script.tv_power_on had none), so they are told apart by what is running.
+- id: tv_power_plug_button
+  alias: Fernseher über die Steckdosentaste einschalten
+  description: Schaltet den Fernseher ein, wenn jemand die Taste an seiner Steckdose drückt.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: switch.living_room_lowboard_tv_plug
+      from: "off"
+      to: "on"
+  conditions:
+    - condition: template
+      value_template: >-
+        {%- set window = state_attr('automation.tv_power_update_window', 'last_triggered') -%}
+        {{ trigger.to_state.context.user_id is none
+           and not is_state('script.tv_power_on', 'on')
+           and (window is none or now() - window > timedelta(minutes=1)) }}
+  actions:
+    - action: script.turn_on
+      target:
+        entity_id: script.tv_power_on
+
+# Optional weekly window (input_boolean.tv_update_window_enabled, off by
+# default) in which the TV has power in standby to install software and app
+# updates. The time is the schedule helper schedule.tv_update_window.
+- id: tv_power_update_window
+  alias: Fernseher Updatefenster
+  description: Gibt dem Fernseher im Zeitplan "Fernseher Updatefenster Zeit" Strom für Updates, wenn das Updatefenster eingeschaltet ist.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: schedule.tv_update_window
+      to: "on"
+      id: start
+    - trigger: state
+      entity_id: schedule.tv_update_window
+      to: "off"
+      id: end
+  conditions:
+    - condition: state
+      entity_id: input_boolean.tv_update_window_enabled
+      state: "on"
+  actions:
+    - choose:
+        - conditions: "{{ trigger.id == 'start' }}"
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.living_room_lowboard_tv_plug
+        # At the end only a TV that nobody watches loses its power.
+        - conditions: >-
+            {%- set power = states.sensor.living_room_lowboard_tv_plug_power -%}
+            {{ trigger.id == 'end'
+               and not is_state('media_player.sony_xr_65x90k_2', 'on')
+               and is_number(power.state)
+               and 0 <= power.state | float < 40
+               and now() - power.last_reported < timedelta(seconds=30)
+               and not is_state('script.tv_power_on', 'on') }}
+          sequence:
+            - action: script.turn_on
+              target:
+                entity_id: script.tv_power_off

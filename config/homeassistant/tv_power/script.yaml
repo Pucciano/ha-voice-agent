@@ -1,0 +1,304 @@
+# Home Assistant scripts: power the living room TV only while it is used.
+# Both are deployed through the script config API as script.tv_power_on and
+# script.tv_power_off (keys below); keep this copy and Home Assistant in
+# sync. See docs/tv_power.md.
+#
+# The Sony XR-65X90K, its soundbar and the power supply of the Vogel's
+# TVM 7675 mount hang on one IKEA INSPELNING plug. In standby the TV never
+# sleeps and draws about 26 W, so the plug is off while nobody watches.
+#
+# Measured on 2026-10-18 (9 cold starts):
+# - The TV is on the network 32-36 s after the plug turns on.
+#   androidtv_remote reconnects every 30 s at most on its own; a reload of its
+#   config entry connects within a few seconds.
+# - After a cold start the TV reports "on" without a picture for about 110 s
+#   and ignores turn_on; KEYCODE_WAKEUP does nothing. One KEYCODE_POWER drops
+#   it into standby at once, and turn_on then brings the picture: 45-54 s from
+#   plug on to picture, instead of 114-116 s.
+# - The picture draws 68-74 W at the home screen, boot and standby 40 W at
+#   most. The first reading after the plug turns on can be the inrush current.
+# - After turn_off the TV reaches standby (about 28 W with the soundbar) within
+#   5-14 s and stays flat.
+#
+# The mount is not in Home Assistant yet (Bluetooth only). Its steps run once
+# `mount_select` names its preset select entity; until then the 60 s wait
+# before the power cut leaves it time to drive back on its own.
+
+tv_power_on:
+  alias: Fernsehen einschalten
+  description: Schaltet die Steckdose von Fernseher und Soundbar ein und schaltet den Fernseher über Android TV ein, sobald er gestartet ist.
+  icon: mdi:television
+  mode: single
+  max_exceeded: silent
+  variables:
+    plug: switch.living_room_lowboard_tv_plug
+    power: sensor.living_room_lowboard_tv_plug_power
+    # Zigbee2MQTT answers with fresh readings; on its own the plug reports
+    # changes only every few seconds.
+    plug_get_topic: zigbee2mqtt/living_room_lowboard_tv_plug/get
+    tv: media_player.sony_xr_65x90k_2
+    remote: remote.sony_xr_65x90k
+    picture_w: 45
+    mount_select: ""
+    mount_view_preset: Fernsehen
+    # A cold start: the plug is off, or it turned on less than 150 s ago.
+    # The button on the plug switches it on before this script starts
+    # (2026-10-19: with only "off" counted, the run took the "on" without a
+    # picture for real and ended).
+    cold: >-
+      {{ is_state(plug, 'off')
+         or now() - states[plug].last_changed < timedelta(seconds=150) }}
+    quirk_done: false
+  sequence:
+    - action: script.turn_off
+      target:
+        entity_id: script.tv_power_off
+    - if: "{{ is_state(plug, 'off') }}"
+      then:
+        - action: switch.turn_on
+          target:
+            entity_id: "{{ plug }}"
+        - delay: 25
+    # Connect: reload androidtv_remote until it reaches the TV.
+    - repeat:
+        sequence:
+          - if: "{{ is_state(tv, 'unavailable') }}"
+            then:
+              - action: homeassistant.reload_config_entry
+                data:
+                  entry_id: "{{ config_entry_id(tv) }}"
+              - wait_template: "{{ not is_state(tv, 'unavailable') }}"
+                timeout: 8
+        until: "{{ not is_state(tv, 'unavailable') or repeat.index >= 12 }}"
+    - if: "{{ is_state(tv, 'unavailable') }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_power_on_failed
+            title: Fernseher
+            message: Der Fernseher ist nach dem Einschalten der Steckdose über Android TV nicht erreichbar.
+        - stop: The TV is not reachable through androidtv_remote.
+          error: true
+    # Picture: KEYCODE_POWER once while a cold TV reports "on" without a
+    # picture, turn_on whenever it reports "off". If POWER does not take, the
+    # TV settles to "off" by itself after about 110 s and turn_on follows.
+    - variables:
+        deadline: "{{ (now() + timedelta(seconds=180)).isoformat() }}"
+    - repeat:
+        sequence:
+          - action: mqtt.publish
+            data:
+              topic: "{{ plug_get_topic }}"
+              payload: '{"power": ""}'
+          - delay: 2
+          - choose:
+              - conditions: >-
+                  {{ cold and not quirk_done and is_state(tv, 'on')
+                     and states(power) | float(0) < picture_w }}
+                sequence:
+                  - action: remote.send_command
+                    target:
+                      entity_id: "{{ remote }}"
+                    data:
+                      command: KEYCODE_POWER
+                  - variables:
+                      quirk_done: true
+                  - wait_template: "{{ not is_state(tv, 'on') }}"
+                    timeout: 8
+              - conditions: "{{ is_state(tv, 'off') }}"
+                sequence:
+                  - action: media_player.turn_on
+                    target:
+                      entity_id: "{{ tv }}"
+                  - wait_template: "{{ is_state(tv, 'on') }}"
+                    timeout: 10
+        until: >-
+          {{ (is_state(tv, 'on') and (not cold or states(power) | float(0) >= picture_w))
+             or now() >= as_datetime(deadline) }}
+    - if: "{{ not is_state(tv, 'on') or (cold and states(power) | float(0) < picture_w) }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_power_on_failed
+            title: Fernseher
+            message: Der Fernseher hat Strom, ließ sich über Android TV aber nicht einschalten.
+        - stop: The TV did not switch on.
+          error: true
+    - action: persistent_notification.dismiss
+      data:
+        notification_id: tv_power_on_failed
+    - if: "{{ mount_select != '' }}"
+      then:
+        - action: select.select_option
+          target:
+            entity_id: "{{ mount_select }}"
+          data:
+            option: "{{ mount_view_preset }}"
+
+tv_power_off:
+  alias: Fernsehen ausschalten
+  description: Schaltet den Fernseher über Android TV aus und nach einer Wartezeit die Steckdose von Fernseher und Soundbar.
+  icon: mdi:television-off
+  mode: single
+  max_exceeded: silent
+  variables:
+    plug: switch.living_room_lowboard_tv_plug
+    power: sensor.living_room_lowboard_tv_plug_power
+    plug_get_topic: zigbee2mqtt/living_room_lowboard_tv_plug/get
+    tv: media_player.sony_xr_65x90k_2
+    standby_w: 35
+    power_max_age_s: 30
+    # Wait between standby and the power cut; the mount must be back at the
+    # wall by then, because its power supply hangs on the same plug.
+    settle_s: 60
+    mount_select: ""
+    mount_wall_preset: Wand
+    mount_travel_s: 45
+  sequence:
+    - action: script.turn_off
+      target:
+        entity_id: script.tv_power_on
+    - if: "{{ mount_select != '' }}"
+      then:
+        - action: select.select_option
+          target:
+            entity_id: "{{ mount_select }}"
+          data:
+            option: "{{ mount_wall_preset }}"
+        - delay: "{{ mount_travel_s }}"
+    - if: "{{ is_state(tv, 'on') }}"
+      then:
+        - action: media_player.turn_off
+          target:
+            entity_id: "{{ tv }}"
+        - wait_template: "{{ not is_state(tv, 'on') }}"
+          timeout: 20
+    - action: mqtt.publish
+      data:
+        topic: "{{ plug_get_topic }}"
+        payload: '{"power": ""}'
+    - wait_template: >-
+        {{ is_number(states(power))
+           and 0 <= states(power) | float < standby_w
+           and now() - states[power].last_reported < timedelta(seconds=power_max_age_s) }}
+      timeout: 30
+    - delay: "{{ settle_s }}"
+    - action: mqtt.publish
+      data:
+        topic: "{{ plug_get_topic }}"
+        payload: '{"power": ""}'
+    - delay: 2
+    # A missing or stale measurement is not evidence of standby.
+    - if: >-
+        {{ not is_number(states(power))
+           or now() - states[power].last_reported >= timedelta(seconds=power_max_age_s)
+           or states(power) | float(-1) < 0 }}
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_power_off_failed
+            title: Fernseher
+            message: Keine gültige aktuelle Leistungsmessung; die Steckdose bleibt eingeschaltet.
+        - stop: No valid fresh power measurement; keep the TV powered.
+          error: true
+    # Switched on again meanwhile (remote, voice): keep the power.
+    - condition: template
+      value_template: "{{ not is_state(tv, 'on') and 0 <= states(power) | float < standby_w }}"
+    - action: switch.turn_off
+      target:
+        entity_id: "{{ plug }}"
+    - action: persistent_notification.dismiss
+      data:
+        notification_id: tv_power_off_failed
+
+# Start an app, and the TV with its power first when it is off. Exposed to
+# Assist, so the LLM assistant can call it for other wording; the voice
+# sentences are in automation.yaml (tv_power_app_voice). The power-on goes
+# through the event tv_power_request, so it runs without the caller's rights
+# (see tv_power_command). The apps need their names in the options of the
+# Android TV Remote integration as well, for the dashboard.
+#
+# Safety:
+# - Only links from `apps` are ever sent. A field selector is no check at
+#   run time, so any other value of `app` (from the LLM, say) stops the run.
+# - A link is resolved by Android. An https link that more than one app
+#   claims shows "open with" (web or app), and a browser could open
+#   instead: https://www.disneyplus.com did that, vnd.youtube:// opened a
+#   system dialog (2026-10-19). So after the launch the foreground app must
+#   be the expected package within 8 s; otherwise BACK closes what opened,
+#   and a notification says so.
+# - The TV's remote service only opens links (an implicit VIEW intent);
+#   intent: URIs with an explicit package did nothing (2026-10-19), so an
+#   app cannot be named as on a phone. Only Netflix is in, by its own
+#   scheme, which no https handler can claim. YouTube (https link),
+#   Disney+ and Prime Video stay out until their links are checked against
+#   the apps' intent filters on the TV (docs/tv_power.md).
+tv_launch_app:
+  alias: Fernseher App starten
+  description: Schaltet den Fernseher bei Bedarf ein und startet Netflix.
+  icon: mdi:television-play
+  mode: restart
+  fields:
+    app:
+      name: App
+      description: Die App, die auf dem Fernseher starten soll.
+      required: true
+      example: Netflix
+      selector:
+        select:
+          options:
+            - Netflix
+  variables:
+    tv: media_player.sony_xr_65x90k_2
+    remote: remote.sony_xr_65x90k
+    # Checked on this TV on 2026-10-19: netflix:// opened Netflix directly.
+    # Package ids (market://launch?id=…) and intent: URIs do nothing here.
+    apps:
+      Netflix:
+        link: netflix://
+        package: com.netflix.ninja
+    entry: "{{ apps.get(app, {}) }}"
+  sequence:
+    - condition: template
+      value_template: "{{ entry.link is defined and entry.package is defined }}"
+    - if: "{{ not is_state('switch.tv_power', 'on') or is_state('script.tv_power_on', 'on') }}"
+      then:
+        - if: "{{ not is_state('script.tv_power_on', 'on') }}"
+          then:
+            - event: tv_power_request
+              event_data:
+                action: "on"
+            - wait_template: "{{ is_state('script.tv_power_on', 'on') }}"
+              timeout: 10
+        - wait_template: "{{ is_state('script.tv_power_on', 'off') }}"
+          timeout: 240
+        # The launcher has just come up.
+        - delay: 2
+    - condition: template
+      value_template: "{{ is_state('switch.tv_power', 'on') }}"
+    - action: media_player.play_media
+      target:
+        entity_id: "{{ tv }}"
+      data:
+        media_content_type: app
+        media_content_id: "{{ entry.link }}"
+    - wait_template: "{{ state_attr(tv, 'app_id') == entry.package }}"
+      timeout: 8
+    - if: "{{ state_attr(tv, 'app_id') != entry.package }}"
+      then:
+        - variables:
+            opened: "{{ state_attr(tv, 'app_id') }}"
+        - action: remote.send_command
+          target:
+            entity_id: "{{ remote }}"
+          data:
+            command: KEYCODE_BACK
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_launch_app_failed
+            title: Fernseher
+            message: >-
+              {{ app }} wurde nicht geöffnet; stattdessen erschien {{ opened }}.
+              Das wurde mit Zurück geschlossen.
+        - stop: The app link opened something else.
+          error: true

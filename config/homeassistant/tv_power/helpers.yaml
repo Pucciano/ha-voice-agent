@@ -1,0 +1,55 @@
+# Helpers of the TV power control, in the shape of configuration.yaml. In
+# Home Assistant they are UI helpers (Settings -> Devices & services ->
+# Helpers); keep this copy and Home Assistant in sync. See docs/tv_power.md.
+#
+# Each one is created with its key as the name, so the entity ids are
+# English, and renamed afterwards. Only switch.tv_power ("Fernsehen") is
+# exposed to Assist.
+
+input_boolean:
+  # Off by default: the weekly update window is optional.
+  tv_update_window_enabled:
+    name: Fernseher Updatefenster
+    icon: mdi:update
+
+schedule:
+  tv_update_window:
+    name: Fernseher Updatefenster Zeit
+    icon: mdi:calendar-clock
+    sunday:
+      - from: "03:00:00"
+        to: "05:00:00"
+
+# Template helper (config flow "Template" -> "Switch"). On while the TV
+# starts or shows a picture; off while it shuts down or has no power.
+#
+# After a cold start the TV reports "on" without a picture for about 110 s,
+# so within 150 s after the plug turned on "on" counts only with a picture
+# (45 W or more). Later a dark scene with less power still counts as on.
+#
+# The actions only fire tv_power_request; automation.tv_power_command runs
+# the scripts without the rights of the user who switched (see
+# automation.yaml).
+template:
+  - switch:
+      - name: Fernsehen
+        unique_id: tv_power
+        icon: mdi:television
+        state: >-
+          {%- set plug = states.switch.living_room_lowboard_tv_plug -%}
+          {%- set settled = plug is not none
+                and now() - plug.last_changed > timedelta(seconds=150) -%}
+          {{ is_state('script.tv_power_on', 'on')
+             or (is_state('switch.living_room_lowboard_tv_plug', 'on')
+                 and is_state('media_player.sony_xr_65x90k_2', 'on')
+                 and not is_state('script.tv_power_off', 'on')
+                 and (settled
+                      or states('sensor.living_room_lowboard_tv_plug_power') | float(0) >= 45)) }}
+        turn_on:
+          - event: tv_power_request
+            event_data:
+              action: "on"
+        turn_off:
+          - event: tv_power_request
+            event_data:
+              action: "off"
