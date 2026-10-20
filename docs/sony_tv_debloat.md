@@ -168,10 +168,62 @@ Some things are cleaner from the TV menu and complement the ADB steps:
 
 Some native telemetry daemons (`iddd`, `idds`, `idd-logreader`) are started by
 `init`, not installed as APKs, so `pm disable` cannot touch them. Block their
-destinations at the network instead — a DNS sinkhole (Pi-hole/AdGuard) or a
-firewall rule on the TV's VLAN neutralises Samba TV and Sony/Google telemetry
+destinations at the network instead — a DNS sinkhole (Pi-hole / AdGuard /
+Unbound DNSBL / dnsmasq) neutralises Samba TV and Sony/Google telemetry
 regardless of which packages remain. This is the only way to stop the native
 daemons without root, and it is fully reversible.
+
+Two things decide whether a DNS block actually works:
+
+- **Put the entry on the host that really answers the TV's DNS.** If you run
+  more than one DNS service (e.g. dnsmasq for DHCP *and* Unbound for DNS), a
+  block added to the one that is *not* on port 53 does nothing. Verify by
+  querying the resolver for a known-blocked name and confirming the sinkhole
+  answer (`0.0.0.0` / NXDOMAIN) rather than the real record.
+- **Force the TV onto that resolver.** Google/Android TV has a hard-coded
+  fallback to `8.8.8.8` / `8.8.4.4`; redirect or block outbound port 53 (and
+  853 for DoT) so the TV cannot bypass the sinkhole.
+
+A domain entry blocks the domain **and all subdomains**, so one line per family
+is enough. Blocking is per-resolver and therefore network-wide: `update.sony.net`
+affects any Sony consumer-electronics device that uses this resolver — but not a
+PlayStation (that uses `*.playstation.net`).
+
+#### Blocklist
+
+Confidence: **confirmed** = observed on this unit; **app present** = the
+owning package is installed and active here, endpoint is the vendor's standard
+one; **verify** = plausible for an installed component, confirm from the
+resolver's query log or a live `adb` capture before relying on it.
+
+| Domain (family) | Purpose / owner | Confidence |
+|---|---|---|
+| `update.sony.net` | Firmware OTA (BRAVIA). Sony's real authoritative SOA was observed, so this is the live firmware host. | confirmed |
+| `samba.tv` | Samba TV automatic content recognition (`tv.samba.ssm`, runs as a foreground service here). | app present |
+| `app-measurement.com` | Google/Firebase Analytics used by the launcher and many apps. Safe to block. | app present |
+| `googleads.g.doubleclick.net` | Google display ads (launcher rows, apps). | app present |
+| `pagead2.googlesyndication.com` | Google ad serving. | app present |
+| `*.qterics.com` | Qterics / NetRange remote device management (`com.qterics.da.product`, `com.sony.dtv.da.service`). | verify |
+| Sony IDD usage upload | `com.sonyericsson.idd.agent` + native `iddd`/`idds`. Endpoint not yet captured. | verify |
+| Sony Select ad feed | `com.sony.dtv.sonyselect` recommendation/ad API. | verify |
+
+> The **verify** rows need a live DNS capture (resolver query log, or sampling
+> the TV's outbound connections over ADB while the home screen loads) to pin the
+> exact hosts before adding them — do not block on a guess.
+
+#### Never block (keep)
+
+These carry content, push, casting, app updates, and setup. Blocking them
+breaks the TV:
+
+- Content: `*.nflxvideo.net` / Netflix AWS ranges, `*.googlevideo.com`
+  (YouTube), Spotify, Disney/Prime CDNs.
+- Google core: `*.1e100.net` and `mtalk.google.com` (FCM push — notifications
+  and cast), `android.googleapis.com`, `play.googleapis.com`,
+  `clients*.google.com`, `*.gvt1.com` / `*.gvt2.com`, `*.gstatic.com`,
+  `android.clients.google.com` (Play, cast, setup, app updates).
+- Casting / local: Chromecast built-in (`mediashell`) and the Android TV
+  remote service — used by the Home Assistant integration.
 
 ## 4. Firmware: stay on the current version
 
@@ -188,10 +240,11 @@ reversible measures, strongest last:
 
 1. **Menu:** Settings → System → About → System software update → turn
    **Automatic software update** off.
-2. **Network (recommended):** block Sony's OTA/update hosts for the TV at the
-   DNS sinkhole or VLAN firewall. This is the active, reliable block and is
-   trivial to lift later. Fold it into the same blocklist used for telemetry
-   (see [network-level blocking](#network-level-blocking-recommended)).
+2. **Network (recommended):** block `update.sony.net` at the DNS resolver that
+   actually serves the TV (see the [blocklist](#blocklist)). This is the active,
+   reliable block and is trivial to lift later. Confirm it took effect by
+   querying the resolver for `info.update.sony.net` — it must return the
+   sinkhole answer (`0.0.0.0` / NXDOMAIN), not the real Akamai record.
 3. **Optional, stronger:** disable the update-checker apps over ADB. Keep the
    APKs (do not uninstall) so updates can be restored with `pm enable`:
    ```bash
