@@ -124,8 +124,10 @@
         - set_conversation_response: "{{ trigger.id }} kann ich auf dem Fernseher noch nicht starten."
 
 # Switched off with the TV's own remote (or anything else): the plug follows
-# after 5 minutes. The power check keeps a TV with a picture powered even
-# when androidtv_remote has lost it.
+# after 5 eligible minutes, including after a script or update window ends.
+# Keep the inhibitors in the trigger so their removal starts a new countdown.
+# Missing, invalid or stale power readings never count as standby. The power
+# check keeps a TV with a picture powered even when androidtv_remote has lost it.
 - id: tv_power_auto_off
   alias: Fernseher nach dem Ausschalten stromlos schalten
   description: Schaltet die Steckdose von Fernseher und Soundbar aus, wenn der Fernseher 5 Minuten aus ist.
@@ -133,9 +135,16 @@
   triggers:
     - trigger: template
       value_template: >-
+        {%- set power = states.sensor.living_room_lowboard_tv_plug_power -%}
         {{ is_state('switch.living_room_lowboard_tv_plug', 'on')
            and not is_state('media_player.sony_xr_65x90k_2', 'on')
-           and states('sensor.living_room_lowboard_tv_plug_power') | float(0) < 40 }}
+           and is_number(power.state)
+           and 0 <= power.state | float < 40
+           and now() - power.last_reported < timedelta(seconds=30)
+           and not is_state('script.tv_power_on', 'on')
+           and not is_state('script.tv_power_off', 'on')
+           and not (is_state('input_boolean.tv_update_window_enabled', 'on')
+                    and is_state('schedule.tv_update_window', 'on')) }}
       for: "00:05:00"
   conditions:
     - condition: template
@@ -206,9 +215,12 @@
                 entity_id: switch.living_room_lowboard_tv_plug
         # At the end only a TV that nobody watches loses its power.
         - conditions: >-
+            {%- set power = states.sensor.living_room_lowboard_tv_plug_power -%}
             {{ trigger.id == 'end'
                and not is_state('media_player.sony_xr_65x90k_2', 'on')
-               and states('sensor.living_room_lowboard_tv_plug_power') | float(0) < 40
+               and is_number(power.state)
+               and 0 <= power.state | float < 40
+               and now() - power.last_reported < timedelta(seconds=30)
                and not is_state('script.tv_power_on', 'on') }}
           sequence:
             - action: script.turn_on

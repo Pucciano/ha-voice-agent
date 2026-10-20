@@ -65,8 +65,8 @@ tv_power_on:
           - if: "{{ is_state(tv, 'unavailable') }}"
             then:
               - action: homeassistant.reload_config_entry
-                target:
-                  entity_id: "{{ tv }}"
+                data:
+                  entry_id: "{{ config_entry_id(tv) }}"
               - wait_template: "{{ not is_state(tv, 'unavailable') }}"
                 timeout: 8
         until: "{{ not is_state(tv, 'unavailable') or repeat.index >= 12 }}"
@@ -147,6 +147,7 @@ tv_power_off:
     plug_get_topic: zigbee2mqtt/living_room_lowboard_tv_plug/get
     tv: media_player.sony_xr_65x90k_2
     standby_w: 35
+    power_max_age_s: 30
     # Wait between standby and the power cut; the mount must be back at the
     # wall by then, because its power supply hangs on the same plug.
     settle_s: 60
@@ -176,7 +177,10 @@ tv_power_off:
       data:
         topic: "{{ plug_get_topic }}"
         payload: '{"power": ""}'
-    - wait_template: "{{ states(power) | float(0) < standby_w }}"
+    - wait_template: >-
+        {{ is_number(states(power))
+           and 0 <= states(power) | float < standby_w
+           and now() - states[power].last_reported < timedelta(seconds=power_max_age_s) }}
       timeout: 30
     - delay: "{{ settle_s }}"
     - action: mqtt.publish
@@ -184,12 +188,28 @@ tv_power_off:
         topic: "{{ plug_get_topic }}"
         payload: '{"power": ""}'
     - delay: 2
+    # A missing or stale measurement is not evidence of standby.
+    - if: >-
+        {{ not is_number(states(power))
+           or now() - states[power].last_reported >= timedelta(seconds=power_max_age_s)
+           or states(power) | float(-1) < 0 }}
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: tv_power_off_failed
+            title: Fernseher
+            message: Keine gültige aktuelle Leistungsmessung; die Steckdose bleibt eingeschaltet.
+        - stop: No valid fresh power measurement; keep the TV powered.
+          error: true
     # Switched on again meanwhile (remote, voice): keep the power.
     - condition: template
-      value_template: "{{ not is_state(tv, 'on') and states(power) | float(0) < standby_w }}"
+      value_template: "{{ not is_state(tv, 'on') and 0 <= states(power) | float < standby_w }}"
     - action: switch.turn_off
       target:
         entity_id: "{{ plug }}"
+    - action: persistent_notification.dismiss
+      data:
+        notification_id: tv_power_off_failed
 
 # Start an app, and the TV with its power first when it is off. Exposed to
 # Assist, so the LLM assistant can call it for other wording; the voice

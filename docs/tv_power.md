@@ -275,7 +275,43 @@ the files in the repository are copies.
 | "Starte Netflix" switches the TV on but the app does not open | The link no longer opens the app; the notification names what opened instead. Check the link on the TV (see Links and safety) before changing it |
 | "Fernsehen einschalten" stops with "Unauthorized" | It was started directly by a user without admin rights; start it through the switch, the event `tv_power_request` or the voice |
 | The TV shuts down while someone watches | Android TV lost the TV and the plug reads less than 40 W, or the update window ended; check the trace of the automation that ran |
-| The plug stays on after the TV went off | A script was running when the TV went off, or the update window was on; the next "aus" turns it off |
+| The plug stays on after the TV went off | A script or the update window delays auto-off; after it ends, five eligible standby minutes start again. Missing or stale power measurements also keep the plug on |
 | The button on the plug switches only the plug | The automation ignores changes from the app and dashboards (user context), while "Fernsehen einschalten" runs, and for a minute after the update window switched the plug |
 | The TV switches on when the plug is switched from somewhere else | Another automation or script switched the plug; their runs carry no parent context, so only the TV power scripts and the update window are recognised |
 | The mount stops halfway when the power goes | Raise `settle_s` in "Fernsehen ausschalten" |
+
+### Shutdown guards
+
+Auto-off counts five minutes with no power script or update window active.
+If a blocker ends while the TV remains off, the countdown starts again.
+Both automatic shutdown paths require a numeric, nonnegative power reading
+reported less than 30 seconds ago. The shutdown script checks again after
+its final MQTT request; invalid or stale data leaves the plug powered and
+creates `tv_power_off_failed`. A successful shutdown clears that notification.
+
+Offline regression tests (Jinja templates with controlled state snapshots):
+`uvx --python 3.12 --with pyyaml==6.0.3 --with jinja2==3.1.6 --from pytest==8.3.5 pytest tests/homeassistant`
+These tests do not replace a Home Assistant trace or hardware test.
+
+After a script config API write, wait for `script.reload` to complete before
+starting a test: saving the file can return before the scheduled reload has
+finished. Android TV reloads use `entry_id: "{{ config_entry_id(tv) }}"`;
+reloading by entity target is deprecated and will be removed in HA 2027.4.
+
+Live verification on 2026-10-20: backed up and deployed the shutdown script,
+auto-off and update-window automations. A real shutdown reached standby
+then cut the plug after about 77 seconds. After over 60 seconds without
+power, the normal `tv_power_request` event started the TV in about 50 seconds.
+Netflix was reopened; the user confirmed normal picture and soundbar audio.
+Reload by `entry_id` was tested against the real Android TV integration.
+Isolated copies in the HA engine confirmed that unknown, unavailable,
+negative and stale readings prevent the final power cut, while a fresh
+standby reading allows it. With a shortened countdown, both script blockers
+and the update-window blocker prevented shutdown and rearmed it on release.
+The copies replaced hardware actions with marker events. Config API readback
+matched the deployed source and the HA configuration check passed.
+
+The unchanged five-minute countdown was also verified in the HA engine:
+after releasing a simulated update window, no early trigger occurred and
+the marker fired at five minutes (observed after 300.84 seconds). All
+temporary automations, scripts, states and test notifications were removed.
