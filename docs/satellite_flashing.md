@@ -10,8 +10,11 @@ revision 1.0 and again on 1.1.
 | 1.0 | Soldered flat onto the XVF3800 board (surface mount, board to board) | Retired: the XVF3800 failed twice, the second time for good |
 | 1.1 | Soldered onto standoff pins (pin headers) | Current |
 
-The board runs the phase 5 firmware from `esphome/`. "Okay Nabu" is detected on
+The board runs the phase 5 firmware from `esphome/`. "Hey AIVI" is detected on
 the device and starts the Home Assistant pipeline `AIVI Lokal Deutsch`. The
+wake word model is trained locally and stays out of git: copy it to
+`esphome/models/` before the first build
+([wake word training, section 9](wake_word_training.md#9-put-the-model-on-the-satellite)). The
 answer plays on the room's speaker: Home Assistant streams it there over the
 network, or the satellite plays it itself through its 3.5 mm jack into the
 speaker's analog input, which gives the XVF3800 an echo reference
@@ -117,12 +120,12 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   first flash with the voice assistant. Only then does it create the
   `Assistent` (pipeline) and `Sprechpausen-Erkennung` selects. Set `Assistent`
   to `AIVI Lokal Deutsch`.
-- Say "Okay Nabu", then "Wie spät ist es?". The ring pulses white-blue twice,
+- Say "Hey AIVI", then "Wie spät ist es?". The ring pulses white-blue twice,
   points at you while you speak, and shows a circling comet while Home
   Assistant works. Home Assistant receives `esphome.aivi_wake_word`,
   `esphome.aivi_stt_text` ("wie spät ist es") and `esphome.aivi_tts_uri` (an
   absolute `http://…/api/tts_proxy/….mp3` URL), each with the `satellite_id`.
-- Switch on `Mikrofon stumm`. The ring turns red and "Okay Nabu" does nothing.
+- Switch on `Mikrofon stumm`. The ring turns red and "Hey AIVI" does nothing.
 - `Anfragen aufzeichnen` is off after every boot. While it is on, the Jetson
   stores every request of this satellite on its USB drive, if the satellite
   is listed there ([Jetson runbook, section 9](jetson_setup.md#9-request-capture)).
@@ -136,11 +139,12 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   or someone sets them (formatBCE's firmware 1.0.7: -30 and 8.0);
   `Selbsttest Status` reads `Bereit`.
 
-Each detection logs `Detected 'Okay Nabu' with sliding average probability is
+Each detection logs `Detected 'Hey AIVI' with sliding average probability is
 … and max probability is …`. The average is taken at the moment it crosses the
-threshold, so it always sits just above the cutoff (0.85) and says nothing
-about confidence. Judge detections by the max probability instead. On the
-living-room board it averaged 0.98 in a quiet room and 0.94 with music.
+threshold, so it always sits just above the cutoff (0.98 at
+`Wenig empfindlich`) and says nothing about confidence. Judge detections by
+the max probability instead. On the living-room board the first detections
+reached 1.00.
 
 ESPHome 2026.9 logs sensor states at VERBOSE level only, so the levels do not
 appear in the default log. Read them in Home Assistant or with any API client.
@@ -197,7 +201,7 @@ volume comes back afterwards. It replaces running music, which does not resume
 
 Test it:
 
-- "Okay Nabu", then "Wie spät ist es?": the answer comes from the room speaker.
+- "Hey AIVI", then "Wie spät ist es?": the answer comes from the room speaker.
 - Negative test: in Home Assistant, fire the event `esphome.aivi_tts_uri` with
   `satellite_id: unknown` from the developer tools. Nothing plays, and the
   automation trace ends at the condition `Known satellite, sent by its own
@@ -235,8 +239,11 @@ reference.
    `config/homeassistant/aivi_jack_release.yaml`
    (`AIVI Klinkenausgang freigeben`) too: the speaker and its analog input,
    and the satellite's `Audioausgang`, assist satellite and
-   `Selbsttest Status`. Update both automations in Home Assistant with the
-   file content.
+   `Selbsttest Status`. Add it to `config/homeassistant/aivi_jack_playback.yaml`
+   (`AIVI Klinkenausgang Wiedergabe`) as well: the speaker in the three
+   triggers, and under `rooms` the speaker, its analog input and the
+   satellite's `Audioausgang`. Update the three automations in Home Assistant
+   with the file content.
 3. Set `Audioausgabe` to `Klinke`. The speaker switches to `Analog Input` and
    gets the fixed volume.
 
@@ -277,6 +284,18 @@ analog input only carries what `Audioausgang` plays, so it is stopped
 10 minutes after that ends; the same holds for an input left selected after
 switching away from `Klinke`.
 
+`AIVI Klinkenausgang Wiedergabe` keeps music on `Audioausgang` in step with
+the speaker. When the speaker stops playing its analog input (paused with its
+button, the BluOS app, the wall display or a voice command, stopped, or
+switched to another source or group) while `Audioausgang` plays,
+`Audioausgang` pauses too, so Music Assistant and Spotify pause. Without it the
+music plays on unheard, and the next wake word, which restarts the paused
+input for the answer, brings it back. When a person starts the paused input
+again, `Audioausgang` resumes. Restarts by `AIVI Klinkenausgang` resume
+nothing: the speaker's state change carries the automation's context, and
+contextless restarts within 15 seconds are skipped only if the paused state
+predates that run. A manual pause after the run can be resumed immediately.
+
 How the Pulse Flex treats its analog input (BluOS 4.12, read from the
 speaker's settings):
 
@@ -294,10 +313,10 @@ speaker's settings):
 
 Test it:
 
-- With `Audioausgabe` on `Klinke`: "Okay Nabu", then "Wie spät ist es?". The
+- With `Audioausgabe` on `Klinke`: "Hey AIVI", then "Wie spät ist es?". The
   answer comes from the speaker's analog input; the router's trace ends at
   `Answer goes to the room speaker`.
-- Start music on the speaker from the BluOS app, then say "Okay Nabu": the
+- Start music on the speaker from the BluOS app, then say "Hey AIVI": the
   music stops and the speaker switches to `Analog Input`.
 - Back on the room speaker's name, answers play over the network again.
 
@@ -468,7 +487,7 @@ Home Assistant keeps the device, its entities and the router entry:
 ## Diagnostic firmware
 
 Use it when a satellite hears nothing: `Pegel Kanal 0` and `Pegel Kanal 1` stay
-at `-inf` (digital silence) and "Okay Nabu" does nothing. It is the regular
+at `-inf` (digital silence) and "Hey AIVI" does nothing. It is the regular
 firmware plus `esphome/packages/aivi-xvf3800-diagnostics.yaml`, which looks
 inside the XVF3800 and can repair its flash. Flash it over the network; the
 log follows right after the upload:
