@@ -30,6 +30,26 @@ This project uses third-party software and model artifacts.
 | python-dotenv | 1.1.1 | BSD-3-Clause |
 | uvicorn | 0.35.0 | BSD-3-Clause |
 
+## Python dependencies (ble_proxy)
+
+| Package | Version | License (upstream) |
+|---|---|---|
+| aioesphomeapi | 46.6.0 | MIT |
+| bleak | 3.0.2 | MIT |
+| dbus-fast | 5.0.22 | MIT |
+| noiseprotocol | 0.3.1 | MIT |
+| protobuf | 7.36.2 | BSD-3-Clause |
+| zeroconf | 0.151.5 | LGPL-2.1-or-later |
+| cryptography | 50.0.2 | Apache-2.0 / BSD-3-Clause |
+| chacha20poly1305-reuseable | 0.13.2 | Apache-2.0 |
+
+The image also installs BlueZ (GPL-2.0-or-later) and dbus (AFL-2.1 /
+GPL-2.0-or-later) from Debian bookworm. `scripts/ble_proxy_host.sh` builds
+Realtek's `rtk_btusb` driver (GPL-2.0) from NVIDIA's L4T kernel sources and
+installs the RTL8761BU firmware from linux-firmware (Realtek's
+redistribution licence, `LICENCE.rtlwifi_firmware.txt`) on the host; neither
+is part of this repository.
+
 ## Python dependencies (stt_bridge)
 
 | Package | Version | License (upstream) |
