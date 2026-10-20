@@ -30,6 +30,7 @@ let it sleep, so the cause stays open; cutting the power avoids it.
    45-54 s after the plug turned on.
 4. If the TV is not reachable or shows no picture after 3 minutes, a
    notification "Fernseher" appears in Home Assistant.
+5. The mount drives to "Couch" ([Mount](#mount)).
 
 When the plug is on already, step 1 is skipped. The POWER key is sent only
 after a cold start: the plug was off, or it turned on less than 150 s ago.
@@ -38,10 +39,12 @@ check for "off" alone missed that case (2026-10-19).
 
 **Fernsehen aus** (script "Fernsehen ausschalten"):
 
-1. The TV turns off through Android TV and reaches standby within 5-14 s.
-2. After 60 s the plug turns off. The wait leaves the mount time to drive
-   back to the wall, because it loses its power with the TV. If the TV was
-   switched on again meanwhile, the plug stays on.
+1. The mount drives to the wall; the script waits until it is there, at
+   most 60 s, because the mount loses its power with the TV
+   ([Mount](#mount)).
+2. The TV turns off through Android TV and reaches standby within 5-14 s.
+3. After 60 s the plug turns off. If the TV was switched on again
+   meanwhile, the plug stays on.
 
 **Automatic:**
 
@@ -224,16 +227,28 @@ start (TV, soundbar and mount on the plug):
 The TVM 7675 is controlled over Bluetooth only. The official MotionMount
 integration supports only the TVM 7675 Pro over Ethernet. The custom
 integration [vogels_motion_mount_ble](https://github.com/Nailik/vogels_motion_mount_ble)
-supports the TVM 7675, but needs Bluetooth in Home Assistant, which has
-none yet: an ESPHome Bluetooth proxy with active connections near the TV
-would do.
+supports the TVM 7675; Home Assistant reaches it through the Bluetooth proxy
+on the Jetson ([Bluetooth proxy](ble_proxy.md)). The device is
+"TV-Halterung" in the living room, with Home Assistant on the mount's user
+PIN (control rights only).
 
-Both scripts have the steps already. Set `mount_select` to the preset
-select entity of the mount, and check `mount_view_preset` ("Fernsehen"),
-`mount_wall_preset` ("Wand") and `mount_travel_s` (45 s). "Fernsehen aus"
-then moves the mount to the wall before it turns the TV off. Until then the
-60 s wait (`settle_s`) leaves the mount time to drive back on its own; raise
-it if the mount is not at the wall when the power goes.
+- "Fernsehen an" moves the mount to "Couch" (`mount_view_preset`) once the
+  TV shows a picture. After a cold start the mount boots with the TV; the
+  script waits up to 90 s (`mount_ready_timeout_s`) for it to be available
+  and does not fail when it cannot be reached.
+- "Fernsehen aus" first moves the mount to its default position "0"
+  (`mount_wall_preset`, flat at the wall) and waits until its distance is 0,
+  at most 60 s (`mount_travel_timeout_s`), because the mount loses its power
+  with the TV. Then the TV goes off, and the plug after `settle_s`.
+- Measured on 2026-10-20: a preset command needs 4-6 s for the connection
+  and the PIN; wall to "Esstisch" (94/-94, the farthest preset) took 32 s,
+  back 25 s. The positions arrive while the mount drives, about once a
+  second. Full cycle: "Fernsehen aus" from "Couch" had the mount at the wall
+  after 16 s, the TV off after 18 s and the plug off after 89 s; the cold
+  "Fernsehen an" showed the picture after 49 s and had the mount at "Couch"
+  after 67 s. Right after it boots, the mount reports a distance of 65535
+  for a moment.
+- An empty `mount_select` skips the mount steps in both scripts.
 
 ## Deploy
 

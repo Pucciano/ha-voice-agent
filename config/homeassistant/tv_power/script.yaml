@@ -20,9 +20,12 @@
 # - After turn_off the TV reaches standby (about 28 W with the soundbar) within
 #   5-14 s and stays flat.
 #
-# The mount is not in Home Assistant yet (Bluetooth only). Its steps run once
-# `mount_select` names its preset select entity; until then the 60 s wait
-# before the power cut leaves it time to drive back on its own.
+# The mount speaks Bluetooth only; Home Assistant reaches it through the
+# Bluetooth proxy on the Jetson (docs/ble_proxy.md) with the integration
+# vogels_motion_mount_ble. Measured on 2026-10-20: a preset command needs 4-6 s
+# for the connection and the PIN, wall to "Esstisch" (the farthest preset)
+# took 32 s, back 25 s. After its power returns, the mount is available again
+# once Home Assistant hears it. An empty `mount_select` skips its steps.
 
 tv_power_on:
   alias: Fernsehen einschalten
@@ -39,8 +42,10 @@ tv_power_on:
     tv: media_player.sony_xr_65x90k_2
     remote: remote.sony_xr_65x90k
     picture_w: 45
-    mount_select: ""
-    mount_view_preset: Fernsehen
+    mount_select: select.wohnung_wohnzimmer_tv_halterung_aktuelles_preset
+    mount_view_preset: Couch
+    # The mount boots with the TV; on a cold start the picture comes first.
+    mount_ready_timeout_s: 90
     # A cold start: the plug is off, or it turned on less than 150 s ago.
     # The button on the plug switches it on before this script starts
     # (2026-10-19: with only "off" counted, the run took the "on" without a
@@ -129,7 +134,11 @@ tv_power_on:
         notification_id: tv_power_on_failed
     - if: "{{ mount_select != '' }}"
       then:
+        - wait_template: "{{ not is_state(mount_select, 'unavailable') }}"
+          timeout: "{{ mount_ready_timeout_s }}"
+        # The TV is on; a mount that cannot be reached must not fail that.
         - action: select.select_option
+          continue_on_error: true
           target:
             entity_id: "{{ mount_select }}"
           data:
@@ -148,12 +157,15 @@ tv_power_off:
     tv: media_player.sony_xr_65x90k_2
     standby_w: 35
     power_max_age_s: 30
-    # Wait between standby and the power cut; the mount must be back at the
-    # wall by then, because its power supply hangs on the same plug.
+    # Wait between standby and the power cut.
     settle_s: 60
-    mount_select: ""
-    mount_wall_preset: Wand
-    mount_travel_s: 45
+    mount_select: select.wohnung_wohnzimmer_tv_halterung_aktuelles_preset
+    mount_distance: number.wohnung_wohnzimmer_tv_halterung_distance
+    # "0" is the mount's default position, flat at the wall.
+    mount_wall_preset: "0"
+    # The mount's power supply hangs on the plug, so the power goes only
+    # once it is at the wall, or after this long.
+    mount_travel_timeout_s: 60
   sequence:
     - action: script.turn_off
       target:
@@ -161,11 +173,13 @@ tv_power_off:
     - if: "{{ mount_select != '' }}"
       then:
         - action: select.select_option
+          continue_on_error: true
           target:
             entity_id: "{{ mount_select }}"
           data:
             option: "{{ mount_wall_preset }}"
-        - delay: "{{ mount_travel_s }}"
+        - wait_template: "{{ states(mount_distance) | int(-1) == 0 }}"
+          timeout: "{{ mount_travel_timeout_s }}"
     - if: "{{ is_state(tv, 'on') }}"
       then:
         - action: media_player.turn_off
