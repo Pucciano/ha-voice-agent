@@ -17,6 +17,7 @@ bridge to a cloud speech recogniser:
 | Speech-to-Phrase | speech to text | internal |
 | Piper (`de_DE-thorsten-medium`) | text to speech | 10200 |
 | Whisper (`base-int8`, on demand) | speech to text, comparison only | 10301 |
+| ble-proxy (own compose project) | Bluetooth for Home Assistant through a USB dongle ([section 13](#13-bluetooth-proxy)) | 6053 |
 
 The steps were verified on `aivi-jetson` on 2026-09-27. In the commands,
 replace `<jetson-ip>` with the Nano's `eth0` address (`ip -4 addr show eth0`)
@@ -239,6 +240,12 @@ missing, and the rule `[schalte ][ das]licht[er]` produces the joined word
 `daslicht`, which Home Assistant does not understand.
 `compose/jetson/custom_sentences/de/lights.yaml` adds the everyday forms for
 areas and floors. It is mounted read-only and read at every training.
+
+Sentence triggers of Home Assistant automations need no file here:
+speech-to-phrase reads them from Home Assistant at every training
+(`conversation/sentences/list`, seen in its `hass_api.py`), like the exposed
+names. After a new or changed trigger, a restart of speech-to-phrase is
+enough.
 
 To update the sentences on a running Jetson, copy them, install them with sudo
 and recreate the container:
@@ -771,6 +778,15 @@ Another transcription API takes `.env` entries too: `STT_API_URL` (default
 `https://api.mistral.ai/v1`) and `STT_MODEL` (default
 `voxtral-mini-latest`). For OpenAI or a Whisper server, add `--bias-field
 prompt` to the bridge's command in the compose file.
+
+## 13. Bluetooth proxy
+
+A Bluetooth dongle at the Jetson serves Home Assistant as an ESPHome-compatible
+Bluetooth proxy for the living room: the Vogel's TV mount and presence. It is
+a compose project of its own, `/opt/aivi/ble-proxy`, so it runs on a
+Raspberry Pi unchanged. The L4T kernel needs a patched Realtek driver for the
+dongle; `scripts/ble_proxy_host.sh` builds and installs it with a boot service
+and a crash guard. Everything else is in [Bluetooth proxy](ble_proxy.md).
 
 ## Logging
 

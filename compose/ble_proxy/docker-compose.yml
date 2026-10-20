@@ -1,0 +1,46 @@
+name: aivi-ble-proxy
+
+# Bluetooth proxy for Home Assistant (issue #29, docs/ble_proxy.md). It speaks
+# the ESPHome native API with Noise encryption on port 6053 and announces
+# itself by mDNS, so Home Assistant adds it like an ESP32 Bluetooth proxy.
+# The same file runs on the Jetson and on a Raspberry Pi; deploy it to
+# /opt/aivi/ble-proxy after scripts/ble_proxy_host.sh has prepared the host.
+#
+# The .env file next to this one (root:docker, 0640, never committed) sets
+# BLE_PROXY_API_KEY and may override the other BLE_PROXY_* values below; see
+# services/ble_proxy/app/config.py.
+#
+# Logging follows the Docker daemon default, which aivi-logmode switches
+# between prod (nothing kept) and dev on the Jetson.
+
+services:
+  ble-proxy:
+    image: aivi/ble-proxy:0.1.0
+    pull_policy: never
+    restart: unless-stopped
+    # Forwards signals to the entrypoint, which runs three processes.
+    init: true
+    # Bluetooth sockets exist only in the host's network namespace, and mDNS
+    # needs the real network.
+    network_mode: host
+    # bluetoothd and the management socket.
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      BLE_PROXY_API_KEY: ${BLE_PROXY_API_KEY:?BLE_PROXY_API_KEY missing in .env}
+      BLE_PROXY_NAME: ${BLE_PROXY_NAME:-aivi-ble-living-room}
+      BLE_PROXY_FRIENDLY_NAME: ${BLE_PROXY_FRIENDLY_NAME:-Bluetooth Wohnzimmer}
+      BLE_PROXY_AREA: ${BLE_PROXY_AREA:-Wohnzimmer}
+      BLE_PROXY_ADAPTER: ${BLE_PROXY_ADAPTER:-hci0}
+      BLE_PROXY_SCAN_MODE: ${BLE_PROXY_SCAN_MODE:-active}
+      BLE_PROXY_ADDRESS: ${BLE_PROXY_ADDRESS:-}
+      BLE_PROXY_LOG_LEVEL: ${BLE_PROXY_LOG_LEVEL:-INFO}
+    volumes:
+      # BlueZ's device records and GATT cache.
+      - bluetooth-state:/var/lib/bluetooth
+
+volumes:
+  bluetooth-state:

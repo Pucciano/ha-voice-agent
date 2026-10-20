@@ -30,6 +30,7 @@ let it sleep, so the cause stays open; cutting the power avoids it.
    45-54 s after the plug turned on.
 4. If the TV is not reachable or shows no picture after 3 minutes, a
    notification "Fernseher" appears in Home Assistant.
+5. The mount drives to "Couch" ([Mount](#mount)).
 
 When the plug is on already, step 1 is skipped. The POWER key is sent only
 after a cold start: the plug was off, or it turned on less than 150 s ago.
@@ -38,10 +39,12 @@ check for "off" alone missed that case (2026-10-19).
 
 **Fernsehen aus** (script "Fernsehen ausschalten"):
 
-1. The TV turns off through Android TV and reaches standby within 5-14 s.
-2. After 60 s the plug turns off. The wait leaves the mount time to drive
-   back to the wall, because it loses its power with the TV. If the TV was
-   switched on again meanwhile, the plug stays on.
+1. The mount drives to the wall; the script waits until it is there, at
+   most 60 s, because the mount loses its power with the TV
+   ([Mount](#mount)).
+2. The TV turns off through Android TV and reaches standby within 5-14 s.
+3. After 60 s the plug turns off. If the TV was switched on again
+   meanwhile, the plug stays on.
 
 **Automatic:**
 
@@ -89,6 +92,51 @@ player keeps the name "Fernseher" and stays exposed, so pause, volume and
 the like still go to it. The switch "Fernsehen" is exposed for the LLM
 assistant and other wording; the plug "Steckdose Fernseher" is not exposed,
 so nobody cuts the power of a running TV by voice.
+
+## Positions
+
+The mount turns the TV towards three places, or folds it to the wall:
+
+| Say, for example | Position |
+|---|---|
+| "Dreh den Fernseher zur Couch", "Fernseher Richtung Sofa" | Couch |
+| "Dreh den Fernseher zum Esstisch", "… zum Tisch", "… zum Esszimmer" | Esstisch |
+| "Dreh den Fernseher zur Ottomane" | Ottomane |
+| "Fahr den Fernseher an die Wand", "Klapp den Fernseher zurück" | Wand |
+| "Wohin zeigt der Fernseher?", "Wie steht der Fernseher?" | answer only |
+
+The verbs "dreh", "richte … aus", "schwenk", "stell" and "fahr" work, also
+at the end ("den Fernseher zur Couch drehen"), with "zur", "zum", "Richtung",
+"in Richtung", "auf die" and the like. Every sentence names "Fernseher" and a
+place, so none catches "schalte den Fernseher aus", a light at the dining
+table or a timer; checked with hassil 3.12.1, the version of Home Assistant
+2026.10.
+
+The automation "Fernseher ausrichten per Sprache" answers "Der Fernseher
+dreht sich zur Couch.", "… zeigt schon zur Couch." or, with the TV off, "Der
+Fernseher startet und dreht sich dann zur Couch, das dauert gut eine
+Minute." It runs the script "Fernseher ausrichten", which is also exposed
+to Assist for the LLM assistant: with the TV off, it starts "Fernsehen an"
+through the event `tv_power_request` with the position, so the mount goes
+there instead of to "Couch". A TV without power stands at the wall already,
+so "Wand" then does nothing. The script returns `ergebnis`, a sentence
+about what happened, so the LLM does not announce a drive that never came
+(it did once, before the script answered). Only the script is exposed, not
+the mount's own entities, so the LLM can choose one of the four positions
+but not set a distance or rotation.
+
+The script "Fernsehhalterung fahren" (`script.tv_mount_move`, not exposed)
+drives the mount for all of them. It presses the integration's preset
+buttons rather than the preset select, because the mount calls one preset
+"Esstisch " with a trailing space, which templates drop. Before a press it
+checks that the preset name at that place still matches; a preset moved or
+renamed in the Vogel's app stops it with a notification "TV-Halterung". It
+does nothing while the TV plug is off: the mount has no power then, but its
+entities stayed available for at least 50 minutes after a power cut.
+Speech-to-Phrase learns all of these sentences from Home Assistant (see
+Deploy). Tested on 2026-10-20 with Piper recordings: all five came back word
+for word in 1.2-1.4 s, "Ottomane" as "Ottoman" and "wohin" as "wo hin",
+which the triggers accept as well.
 
 ## Apps
 
@@ -166,9 +214,8 @@ Configure), so the media player and the wall display show their names:
 | Disney+ | `com.disney.disneyplus` |
 | Prime Video | `com.amazon.amazonvideo.livingroom` |
 
-For the local pipeline, `compose/jetson/custom_sentences/de/tv_apps.yaml`
-teaches Speech-to-Phrase the same sentences; deploy it as described in
-`docs/jetson_setup.md` (custom sentences), which needs sudo on the Jetson.
+Speech-to-Phrase learns these sentences for the local pipeline from Home
+Assistant (see Deploy).
 
 ## Entities
 
@@ -178,6 +225,9 @@ teaches Speech-to-Phrase the same sentences; deploy it as described in
 | `script.tv_power_on` | Fernsehen einschalten | Power on, boot, picture |
 | `script.tv_power_off` | Fernsehen ausschalten | TV off, wait, power off |
 | `script.tv_launch_app` | Fernseher App starten | TV on when needed, then start Netflix by its checked link (exposed to Assist) |
+| `script.tv_mount_position` | Fernseher ausrichten | TV on when needed, then turn it to Couch, Esstisch or Ottomane or to the wall (exposed to Assist) |
+| `script.tv_mount_move` | Fernsehhalterung fahren | Drives the mount by its preset buttons; used by the other scripts |
+| `automation.tv_mount_voice` | Fernseher ausrichten per Sprache | Voice sentences for the positions and "Wohin zeigt der Fernseher?" |
 | `automation.tv_power_app_voice` | Fernseher App per Sprache | Voice sentences for the four apps |
 | `automation.tv_power_command` | Fernsehen an oder aus | Runs the scripts for the voice sentences and the event `tv_power_request` from the switch |
 | `automation.tv_power_auto_off` | Fernseher nach dem Ausschalten stromlos schalten | Power off 5 minutes after the TV went off |
@@ -224,16 +274,30 @@ start (TV, soundbar and mount on the plug):
 The TVM 7675 is controlled over Bluetooth only. The official MotionMount
 integration supports only the TVM 7675 Pro over Ethernet. The custom
 integration [vogels_motion_mount_ble](https://github.com/Nailik/vogels_motion_mount_ble)
-supports the TVM 7675, but needs Bluetooth in Home Assistant, which has
-none yet: an ESPHome Bluetooth proxy with active connections near the TV
-would do.
+supports the TVM 7675; Home Assistant reaches it through the Bluetooth proxy
+on the Jetson ([Bluetooth proxy](ble_proxy.md)). The device is
+"TV-Halterung" in the living room, with Home Assistant on the mount's user
+PIN (control rights only).
 
-Both scripts have the steps already. Set `mount_select` to the preset
-select entity of the mount, and check `mount_view_preset` ("Fernsehen"),
-`mount_wall_preset` ("Wand") and `mount_travel_s` (45 s). "Fernsehen aus"
-then moves the mount to the wall before it turns the TV off. Until then the
-60 s wait (`settle_s`) leaves the mount time to drive back on its own; raise
-it if the mount is not at the wall when the power goes.
+- "Fernsehen an" moves the mount to "Couch" (`mount_view_preset`), or to the
+  position "Fernseher ausrichten" asked for, once the TV shows a picture.
+  After a cold start the mount boots with the TV; "Fernsehhalterung fahren"
+  waits up to 90 s for it to be available. The move is started, not awaited,
+  so a mount that cannot be reached never delays or fails the TV.
+- "Fernsehen aus" first moves the mount to its default position "0" (flat
+  at the wall) and waits until its distance is 0, at most 60 s, because the
+  mount loses its power with the TV; it waits only 15 s for a mount that
+  cannot be reached. Then the TV goes off, and the plug after `settle_s`.
+- Measured on 2026-10-20: a preset command needs 4-6 s for the connection
+  and the PIN; wall to "Esstisch" (94/-94, the farthest preset) took 32 s,
+  back 25 s. The positions arrive while the mount drives, about once a
+  second. Full cycle: "Fernsehen aus" from "Couch" had the mount at the wall
+  after 16 s, the TV off after 18 s and the plug off after 89 s; the cold
+  "Fernsehen an" showed the picture after 49 s and had the mount at "Couch"
+  after 67 s. Right after it boots, the mount reports a distance of 65535
+  for a moment.
+- An empty `mount_view_preset` keeps the mount where it is when the TV
+  starts.
 
 ## Deploy
 
@@ -252,8 +316,14 @@ the files in the repository are copies.
   of `automation.yaml`. Rename each entity to `automation.<id>` once.
 - **Assist:** new entities are exposed by default. Expose only
   `switch.tv_power`, and unexpose the plug.
-- **Speech-to-Phrase:** restart it on the Jetson to learn "Fernsehen"
-  (`docker compose restart speech-to-phrase` in `/opt/aivi/compose`).
+- **Speech-to-Phrase:** restart it on the Jetson
+  (`docker compose restart speech-to-phrase` in `/opt/aivi/compose`, no
+  sudo). At every training it reads the names exposed to Assist and the
+  sentence triggers of all automations (`conversation/sentences/list`), so
+  it learns "Fernsehen" and the sentences for apps and positions without
+  files of its own.
+- **Assist for the mount:** expose `script.tv_mount_position` only; the
+  mount's own entities and `script.tv_mount_move` stay unexposed.
 
 ## Testing
 
