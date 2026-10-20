@@ -132,8 +132,9 @@
 
 # "Dreh den Fernseher zur Couch" and the like: script.tv_mount_position
 # drives the Vogel's mount and switches the TV on when needed. The trigger id
-# is the position in the script. Speech-to-Phrase learns the same sentences
-# from compose/jetson/custom_sentences/de/tv_mount.yaml; keep both in step.
+# is the position in the script. Speech-to-Phrase reads these sentence
+# triggers from Home Assistant at every training, so a restart of it is
+# enough after a change.
 # Every sentence names "Fernseher" and a target, so none catches "schalte
 # den Fernseher aus" or a light at the dining table.
 - id: tv_mount_voice

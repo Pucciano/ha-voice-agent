@@ -241,6 +241,12 @@ missing, and the rule `[schalte ][ das]licht[er]` produces the joined word
 `compose/jetson/custom_sentences/de/lights.yaml` adds the everyday forms for
 areas and floors. It is mounted read-only and read at every training.
 
+Sentence triggers of Home Assistant automations need no file here:
+speech-to-phrase reads them from Home Assistant at every training
+(`conversation/sentences/list`, seen in its `hass_api.py`), like the exposed
+names. After a new or changed trigger, a restart of speech-to-phrase is
+enough.
+
 To update the sentences on a running Jetson, copy them, install them with sudo
 and recreate the container:
 

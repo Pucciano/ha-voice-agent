@@ -129,8 +129,10 @@ buttons rather than the preset select, because the mount calls one preset
 "Esstisch " with a trailing space, which templates drop. Before a press it
 checks that the preset name at that place still matches; a preset moved or
 renamed in the Vogel's app stops it with a notification "TV-Halterung".
-Speech-to-Phrase learns the sentences from
-`compose/jetson/custom_sentences/de/tv_mount.yaml` (see Deploy).
+Speech-to-Phrase learns all of these sentences from Home Assistant (see
+Deploy). Tested on 2026-10-20 with Piper recordings: all five came back word
+for word in 1.2-1.4 s, "Ottomane" as "Ottoman" and "wohin" as "wo hin",
+which the triggers accept as well.
 
 ## Apps
 
@@ -208,9 +210,8 @@ Configure), so the media player and the wall display show their names:
 | Disney+ | `com.disney.disneyplus` |
 | Prime Video | `com.amazon.amazonvideo.livingroom` |
 
-For the local pipeline, `compose/jetson/custom_sentences/de/tv_apps.yaml`
-teaches Speech-to-Phrase the same sentences; deploy it as described in
-`docs/jetson_setup.md` (custom sentences), which needs sudo on the Jetson.
+Speech-to-Phrase learns these sentences for the local pipeline from Home
+Assistant (see Deploy).
 
 ## Entities
 
@@ -311,10 +312,12 @@ the files in the repository are copies.
   of `automation.yaml`. Rename each entity to `automation.<id>` once.
 - **Assist:** new entities are exposed by default. Expose only
   `switch.tv_power`, and unexpose the plug.
-- **Speech-to-Phrase:** copy `compose/jetson/custom_sentences/de/tv_apps.yaml`
-  and `tv_mount.yaml` to `/opt/aivi/compose/custom_sentences/de/` (needs
-  sudo) and restart it on the Jetson to learn "Fernsehen" and the sentences
-  (`docker compose restart speech-to-phrase` in `/opt/aivi/compose`).
+- **Speech-to-Phrase:** restart it on the Jetson
+  (`docker compose restart speech-to-phrase` in `/opt/aivi/compose`, no
+  sudo). At every training it reads the names exposed to Assist and the
+  sentence triggers of all automations (`conversation/sentences/list`), so
+  it learns "Fernsehen" and the sentences for apps and positions without
+  files of its own.
 - **Assist for the mount:** expose `script.tv_mount_position` only; the
   mount's own entities and `script.tv_mount_move` stay unexposed.
 
