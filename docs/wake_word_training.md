@@ -216,7 +216,9 @@ false accepts a day the drive holds years of them.
 
 Listen to the clips to tell a false accept from a real "Hey AIVI": a false
 accept is a hard negative, the most valuable negative data there is, because
-it is exactly what the current model gets wrong. Section 5 does not import
+it is exactly what the current model gets wrong. How loud the room was around
+a detection, and what the level history can and cannot explain, is in
+[microphone levels](microphone_levels.md). Section 5 does not import
 `recordings/wake/` yet; until it does, copy a reviewed false accept into
 `recordings/negative/` by hand, where the import cuts negative windows out of
 it, and keep real wake words out of that folder.

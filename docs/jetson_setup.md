@@ -265,7 +265,10 @@ Training takes about 11 s. Requests in that time return an empty text.
 
 The `stt-capture` relay can store real voice requests as raw data for
 improving speech recognition: the audio that Speech-to-Phrase received and
-the text it recognised. Every satellite has a switch `Anfragen aufzeichnen` in
+the text it recognised. A request with an empty or very quiet recording is
+usually a false accept of the wake word;
+[microphone levels](microphone_levels.md) explains how to read such a
+request together with the level history. Every satellite has a switch `Anfragen aufzeichnen` in
 Home Assistant. It is on unless somebody switched it off, and a restart of
 the satellite keeps that choice.
 
