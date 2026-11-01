@@ -7,7 +7,7 @@ there anything to hear when the wake word fired.
 
 The first analysis of a full week, on 2026-11-01, is in
 [Baseline, 2026-10-26 to 2026-11-01](#baseline-2026-10-26-to-2026-11-01).
-Its open question — what actually triggers a false accept — is issue #30,
+Its open question — what actually triggers a false accept — is issue #32,
 which the wake word clips
 ([wake word training, section 4](wake_word_training.md#4-record-the-household))
 collect the evidence for.
