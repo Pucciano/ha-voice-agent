@@ -123,9 +123,15 @@ The API key also encrypts OTA updates, so there is no separate OTA password.
   `esphome.aivi_stt_text` ("wie spät ist es") and `esphome.aivi_tts_uri` (an
   absolute `http://…/api/tts_proxy/….mp3` URL), each with the `satellite_id`.
 - Switch on `Mikrofon stumm`. The ring turns red and "Okay Nabu" does nothing.
-- `Anfragen aufzeichnen` is off after every boot. While it is on, the Jetson
-  stores every request of this satellite on its USB drive, if the satellite
-  is listed there ([Jetson runbook, section 9](jetson_setup.md#9-request-capture)).
+- `Anfragen aufzeichnen` is on after a boot unless it was switched off. While
+  it is on, the Jetson stores every request of this satellite on its USB
+  drive, if the satellite is listed there
+  ([Jetson runbook, section 9](jetson_setup.md#9-request-capture)).
+- `Wake-Word-Mitschnitt` is on after a boot as well. Say the wake word and
+  say nothing else: `Wake-Word-Mitschnitt Status` reads `Mitschnitt
+  sat_…, 4.0 s`, and the clip on the drive holds the wake word itself, not
+  only what came after it
+  ([wake word training, section 4](wake_word_training.md#4-record-the-household)).
 - `Wake-Word-Aufnahme Status` reads `Bereit`. A short take (set
   `Wake-Word-Aufnahme Dauer` to 0.5 and switch `Wake-Word-Aufnahme` on) shows
   a circling light and ends with `Gespeichert: …`, if the satellite is listed

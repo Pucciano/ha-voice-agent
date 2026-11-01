@@ -5,6 +5,11 @@ over TCP to services/wake_word_recorder, framed as Wyoming events. Home
 Assistant stays connected the whole time. YAML starts and stops takes through
 the public methods of TakeStreamer; see
 esphome/packages/aivi-wake-word-recording.yaml.
+
+Besides takes it records a short clip around every wake word detection
+(issue #2): `clip_preroll` of buffered audio from before the detection plus
+`clip_postroll` after it, so a false accept can be heard and used as a hard
+negative for the next training run.
 """
 
 import re
@@ -19,6 +24,8 @@ AUTO_LOAD = ["audio", "ring_buffer", "socket"]
 DEPENDENCIES = ["microphone", "network"]
 
 CONF_BUFFER_DURATION = "buffer_duration"
+CONF_CLIP_POSTROLL = "clip_postroll"
+CONF_CLIP_PREROLL = "clip_preroll"
 CONF_HOST = "host"
 CONF_ON_STATUS = "on_status"
 CONF_SATELLITE_ID = "satellite_id"
@@ -42,6 +49,21 @@ def _characters(pattern: str, maximum: int, minimum: int = 1):
         return value
 
     return validate
+
+
+def _clip_fits_buffer(config):
+    """A clip is streamed through the take buffer, so it must fit in it."""
+
+    clip_ms = (
+        config[CONF_CLIP_PREROLL].total_milliseconds
+        + config[CONF_CLIP_POSTROLL].total_milliseconds
+    )
+    if clip_ms > config[CONF_BUFFER_DURATION].total_milliseconds:
+        raise cv.Invalid(
+            f"{CONF_CLIP_PREROLL} plus {CONF_CLIP_POSTROLL} must not be "
+            f"longer than {CONF_BUFFER_DURATION}"
+        )
+    return config
 
 
 CONFIG_SCHEMA = cv.All(
@@ -70,12 +92,31 @@ CONFIG_SCHEMA = cv.All(
                     max=cv.TimePeriod(seconds=30),
                 ),
             ),
+            # Audio kept before a detection, the heart of a clip; it needs
+            # its own buffer of that size in PSRAM.
+            cv.Optional(CONF_CLIP_PREROLL, default="2s"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(
+                    min=cv.TimePeriod(milliseconds=500),
+                    max=cv.TimePeriod(seconds=5),
+                ),
+            ),
+            # Audio kept after a detection, long enough to hear whether a
+            # command followed.
+            cv.Optional(CONF_CLIP_POSTROLL, default="2s"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(
+                    min=cv.TimePeriod(milliseconds=500),
+                    max=cv.TimePeriod(seconds=10),
+                ),
+            ),
             cv.Optional(CONF_ON_STATUS): automation.validate_automation(
                 single=True
             ),
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
+    _clip_fits_buffer,
     socket.consume_sockets(1, "take_streamer"),
 )
 
@@ -105,6 +146,12 @@ async def to_code(config):
     cg.add(var.set_satellite_id(config[CONF_SATELLITE_ID]))
     cg.add(
         var.set_buffer_duration(config[CONF_BUFFER_DURATION].total_milliseconds)
+    )
+    cg.add(
+        var.set_preroll_duration(config[CONF_CLIP_PREROLL].total_milliseconds)
+    )
+    cg.add(
+        var.set_postroll_duration(config[CONF_CLIP_POSTROLL].total_milliseconds)
     )
     ota.request_ota_state_listeners()
 

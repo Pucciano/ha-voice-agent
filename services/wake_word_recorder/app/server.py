@@ -1,10 +1,10 @@
 """Accept takes from the satellites and write them with the Store.
 
-One connection carries one take (see protocol.py). The first event must be
-`take-start` within a few seconds, and nothing is written before the token,
-the satellite and the request have been checked. A satellite has at most one
-take: a new `take-start` ends a stale one, for example after the satellite
-lost its connection without a clean end.
+One connection carries one take or one clip (see protocol.py). The first
+event must be `take-start` within a few seconds, and nothing is written
+before the token, the satellite and the request have been checked. A
+satellite has at most one take: a new `take-start` ends a stale one, for
+example after the satellite lost its connection without a clean end.
 
 Logs never contain speaker names; they may be kept in dev log mode.
 """
@@ -24,7 +24,7 @@ from .store import CHANNELS, MIN_SECONDS, RATE, WIDTH, Store, Take, TakeInfo
 _LOGGER = logging.getLogger(__name__)
 
 BYTES_PER_SECOND = RATE * WIDTH * CHANNELS
-KINDS = ("positive", "negative")
+KINDS = ("positive", "negative", "wake")
 # Lower case, no separator at either end and none twice in a row, so a name
 # never contains the "__" that separates the parts of an imported clip name.
 SPEAKER = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")

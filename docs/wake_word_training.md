@@ -191,6 +191,36 @@ feedback, so nobody adapts their voice to what the current model already
 detects. The satellite still counts its detections; the status shows the
 number at the end, if `Wake Word` is set to `Hey AIVI` or `Beide`.
 
+### Clips of every detection
+
+A take only records while somebody started it, so a false accept in the
+middle of the night is gone for good. The satellite therefore records a clip
+of every wake word detection on its own, as long as `Wake-Word-Mitschnitt` is
+on, which it is after a restart. A clip is four seconds long: two seconds
+from before the detection, kept in a ring buffer on the satellite, and two
+seconds after it. The pre-roll is the point of the clip, because it holds the
+sound the model reacted to; the request capture of the speech recogniser
+starts after the detection and can never show it
+([Jetson runbook, section 9](jetson_setup.md#9-request-capture)).
+
+| Entity | Purpose |
+|---|---|
+| `Wake-Word-Mitschnitt` | On records a clip of every detection; off frees the ring buffer |
+| `Wake-Word-Mitschnitt Status` | The last result, e.g. `Mitschnitt sat_living_room_20261101-181512, 4.0 s`, or an error |
+
+Clips land in `recordings/wake/` on the capture drive and come along with
+`make ww-pull`. Each clip has a sidecar with the detection's offset in
+seconds, which is the length of the pre-roll, plus the peak and RMS level of
+the audio. A clip takes about 128 kB; at the measured rate of one to two
+false accepts a day the drive holds years of them.
+
+Listen to the clips to tell a false accept from a real "Hey AIVI": a false
+accept is a hard negative, the most valuable negative data there is, because
+it is exactly what the current model gets wrong. Section 5 does not import
+`recordings/wake/` yet; until it does, copy a reviewed false accept into
+`recordings/negative/` by hand, where the import cuts negative windows out of
+it, and keep real wake words out of that folder.
+
 Everyday sound: set `Wake-Word-Aufnahme Art` to `Negativ (Alltag)`
 (30 minutes) and switch the take on. A red light circles. Leave it running
 during normal life: conversations, TV, music, cooking, phone calls. The
@@ -230,6 +260,8 @@ entities:
   - number.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_dauer
   - switch.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme
   - sensor.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_status
+  - switch.wohnung_wohnzimmer_aivi_satellit_wake_word_mitschnitt
+  - sensor.wohnung_wohnzimmer_aivi_satellit_wake_word_mitschnitt_status
 ```
 
 ### Without the Jetson

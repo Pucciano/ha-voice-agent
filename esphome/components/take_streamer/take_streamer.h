@@ -37,6 +37,12 @@ namespace esphome::take_streamer {
 /// detection times count samples, never wall time. If the network stalls
 /// longer than the buffer, the take ends with what was recorded, so a file
 /// never has a silent gap.
+///
+/// Besides takes the component records clips (kind "wake"): while clips are
+/// enabled it keeps the last `preroll` of audio in a second ring buffer, and
+/// start_clip() sends that pre-roll followed by `postroll` of live audio.
+/// The sound that triggered the wake word is therefore in the clip, which a
+/// recording started after the detection can never hold.
 class TakeStreamer final : public Component
 #ifdef USE_OTA_STATE_LISTENER
     ,
@@ -59,11 +65,21 @@ class TakeStreamer final : public Component
   void set_token(const std::string &token) { this->token_ = token; }
   void set_satellite_id(const std::string &satellite_id) { this->satellite_id_ = satellite_id; }
   void set_buffer_duration(uint32_t buffer_ms) { this->buffer_ms_ = buffer_ms; }
+  void set_preroll_duration(uint32_t preroll_ms) { this->preroll_ms_ = preroll_ms; }
+  void set_postroll_duration(uint32_t postroll_ms) { this->postroll_ms_ = postroll_ms; }
 
   /// Starts a take. kind is "positive" (needs a speaker: lower case letters,
   /// digits and single "_" or "-" in between) or "negative". Returns false
   /// and reports the status "error" if the take cannot start.
   bool start_take(const std::string &kind, const std::string &speaker, float seconds);
+  /// Keeps the pre-roll buffer filled, so start_clip() has audio from before
+  /// the detection. Off frees the microphone again between takes.
+  void set_clips_enabled(bool enabled);
+  bool clips_enabled() const { return this->clips_enabled_; }
+  /// Records one clip around a wake word detection: the buffered pre-roll,
+  /// then `postroll` of live audio. Returns false if no clip was started,
+  /// for example while a take runs; such a call reports no status.
+  bool start_clip(const std::string &trigger);
   /// Ends a running take; the audio recorded so far is kept. Before the
   /// recorder has accepted the take, it is cancelled instead.
   void stop_take(const std::string &reason);
@@ -75,6 +91,8 @@ class TakeStreamer final : public Component
   /// From take-accepted until the take has ended.
   bool is_recording() const { return this->state_ == State::STREAMING || this->state_ == State::FINISHING; }
   bool is_positive() const { return this->kind_ == "positive"; }
+  /// A clip around a detection, not a take started in Home Assistant.
+  bool is_clip() const { return this->clip_; }
 
   // Details for the status text.
   const std::string &kind() const { return this->kind_; }
@@ -99,6 +117,13 @@ class TakeStreamer final : public Component
   };
 
   void set_state_(State state);
+  /// Opens the non-blocking connection to the recorder; false on errors,
+  /// with the status already reported.
+  bool connect_();
+  /// Starts or stops filling the pre-roll buffer, after setup.
+  void apply_preroll_();
+  /// Moves the buffered pre-roll into the take buffer; returns its bytes.
+  uint32_t take_preroll_();
   void loop_connecting_();
   void loop_waiting_accept_();
   void loop_streaming_();
@@ -121,6 +146,8 @@ class TakeStreamer final : public Component
 
   microphone::MicrophoneSource *microphone_source_{nullptr};
   std::unique_ptr<ring_buffer::RingBuffer> ring_buffer_;
+  // Always holds the last preroll_ms_ of audio while clips are enabled.
+  std::unique_ptr<ring_buffer::RingBuffer> preroll_buffer_;
   std::unique_ptr<socket::Socket> socket_;
 
   std::string host_;
@@ -128,6 +155,8 @@ class TakeStreamer final : public Component
   std::string token_;
   std::string satellite_id_;
   uint32_t buffer_ms_{5000};
+  uint32_t preroll_ms_{2000};
+  uint32_t postroll_ms_{2000};
 
   State state_{State::IDLE};
   uint32_t state_since_ms_{0};
@@ -143,10 +172,13 @@ class TakeStreamer final : public Component
   uint32_t detections_{0};
   bool source_started_{false};
   bool peer_closed_{false};
+  bool clip_{false};
+  bool clips_enabled_{false};
 
   // Shared with the microphone task. budget_bytes_ is set before capturing_
   // turns true and not changed while it is.
   std::atomic<bool> capturing_{false};
+  std::atomic<bool> preroll_filling_{false};
   std::atomic<bool> overflow_{false};
   std::atomic<uint32_t> captured_bytes_{0};
   std::atomic<uint32_t> dropped_bytes_{0};
