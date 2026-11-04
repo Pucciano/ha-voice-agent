@@ -175,7 +175,7 @@ samples:
 # Own recordings, see docs/wake_word_training.md.
 recordings:
   # Mac recorder only (record_satellite.py): its stream starts right after
-  # "Okay Nabu", so the first moments can still hold the end of that phrase.
+  # the wake word, so the first moments can still hold the end of it.
   # Takes recorded through Home Assistant start at the switch and are kept
   # whole.
   skip_start_s: 0.6

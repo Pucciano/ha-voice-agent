@@ -19,8 +19,10 @@
 # no other room plays the satellite's audio. Selecting the input starts a
 # continuous stream of the input at once (BluOS state "stream", about 0.5 s
 # after the call). A paused input (button on the speaker) plays nothing, so
-# it is selected again too. The automation checks that the speaker plays the
-# input, tries once more, and logs a warning otherwise.
+# it is selected again too; "AIVI Klinkenausgang Wiedergabe"
+# (aivi_jack_playback.yaml) paused the satellite's music with it, so the
+# answer plays alone. The automation checks that the speaker plays the input,
+# tries once more, and logs a warning otherwise.
 #
 # On switching, the speaker gets the room's fixed volume. It stays there: the
 # echo canceller needs a constant echo path, so loudness is set on the

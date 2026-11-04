@@ -72,6 +72,31 @@ views:
                             entity: light.living_room_floor_lamp_bulb_1
                             name: Stehlampe
                             icon: mdi:floor-lamp
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:television
+                    title: Fernsehen
+                  custom_fields:
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_tv_tile
+                        entity: switch.tv_power
+                        name: Fernseher
+                        icon: mdi:television
+                        variables:
+                          plug: switch.living_room_lowboard_tv_plug
+                          power: sensor.living_room_lowboard_tv_plug_power
+                          player: media_player.sony_xr_65x90k_2
+                          on_script: script.tv_power_on
+                          off_script: script.tv_power_off
+                        triggers_update:
+                          - switch.living_room_lowboard_tv_plug
+                          - sensor.living_room_lowboard_tv_plug_power
+                          - media_player.sony_xr_65x90k_2
+                          - script.tv_power_on
+                          - script.tv_power_off
           side:
             card:
               type: vertical-stack

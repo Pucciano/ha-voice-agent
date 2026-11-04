@@ -4,7 +4,7 @@ The satellite streams its voice assistant audio (XVF3800 channel 1, 16 kHz,
 exactly what the wake word model hears) to this script instead of Home
 Assistant. ESPHome serves one voice assistant client at a time: disable the
 satellite's ESPHome entry in Home Assistant before recording. Every take
-starts when the satellite detects "Okay Nabu" and lasts --seconds.
+starts when the satellite detects "Hey AIVI" and lasts --seconds.
 """
 
 import argparse
@@ -236,7 +236,7 @@ async def record(args: argparse.Namespace, config: dict, paths: Paths) -> None:
                 if args.negative
                 else f'"Hey AIVI" every 2-3 s ({args.speaker})'
             )
-            print(f'\nTake {number}: say "Okay Nabu" to start, then {what}.')
+            print(f'\nTake {number}: say "Hey AIVI" to start, then {what}.')
             await recorder.take.started.wait()
             print("  Recording.")
             await show_progress(recorder.take)

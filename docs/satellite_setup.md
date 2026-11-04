@@ -76,8 +76,11 @@ If the satellite does not appear in Home Assistant after flashing, verify that
 the ESP32S3 has connected to the correct Wi-Fi network and that mDNS traffic
 is not blocked between the satellite and the HA host.
 
-If wake-word detection triggers too frequently, lower the sensitivity threshold
-in the microWakeWord configuration. If it fails to trigger reliably, check that
+If the wake word triggers too often, set the satellite's
+`Wake-Word-Empfindlichkeit` to `Wenig empfindlich`, the highest cutoff (0.98;
+`Mittel empfindlich` is 0.97). Room conversation is the usual trigger; record
+it as everyday sound and train a new model
+(`docs/wake_word_training.md`). If it fails to trigger reliably, check that
 the I2S pin mapping matches the XVF3800 output and that the audio gain levels
 are appropriate. The XVF3800 output should already be normalized, but board
 revisions may differ.
