@@ -218,10 +218,10 @@ Listen to the clips to tell a false accept from a real "Hey AIVI": a false
 accept is a hard negative, the most valuable negative data there is, because
 it is exactly what the current model gets wrong. How loud the room was around
 a detection, and what the level history can and cannot explain, is in
-[microphone levels](microphone_levels.md). Section 5 does not import
-`recordings/wake/` yet; until it does, copy a reviewed false accept into
-`recordings/negative/` by hand, where the import cuts negative windows out of
-it, and keep real wake words out of that folder.
+[microphone levels](microphone_levels.md). The import routes the clips into
+the review folders of section 5; measured over the first three days about
+half of them were real commands, so none is trained on before somebody
+listened to it.
 
 Everyday sound: set `Wake-Word-Aufnahme Art` to `Negativ (Alltag)`
 (30 minutes) and switch the take on. A red light circles. Leave it running
@@ -360,6 +360,24 @@ are the most useful negatives. Put its file name into
 `dev/datasets/wake_word/recordings/negative_keep.txt` and import again to
 keep it. Training chunks never span a cut, and the held-out quarter becomes
 one track per uninterrupted piece.
+
+The clips of single detections in `recordings/wake/` (section 4) get the
+same window, so a hard negative has the same shape wherever it came from.
+Their names carry a `clip_` prefix. Because about half of the clips are real
+commands, the import decides nothing on its own:
+
+| Where a window lands | Why |
+|---|---|
+| `clips/real_negative/review/` | the normal case: listen to it |
+| `clips/real_positive/review/` | Whisper heard the wake word, so it looks like a real one |
+| `clips/real_negative/train/` | its name is in `recordings/negative_keep.txt` |
+| nowhere | its name is in `recordings/excluded.txt` |
+
+A name on one of the two lists beats both Whisper models, because somebody
+listened. `clips/real_negative/wake_clips.csv` lists every window with its
+level, both transcripts and the verdict. Clips never enter a test split:
+false accepts per hour stay measured on the held-out tracks of the everyday
+recordings, which are uninterrupted audio.
 
 ## 6. Build the features
 
