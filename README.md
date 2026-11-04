@@ -277,6 +277,9 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/bedroom_sunrise_alarm.md` covers the sunrise alarm on the bedroom's
   WLED bed light: behaviour, helpers, scene, script, automation and the WLED
   reset preset.
+- `docs/microphone_levels.md` reads the microphone level history of a
+  satellite: noise floor, the rhythm of the room, clipping, and what the
+  level says about a single wake word detection.
 
 ## Makefile helpers
 
@@ -296,6 +299,7 @@ make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU
 make sat-chip DEVICE=/dev/cu.usbmodemXXXX           # identify the ESP32
 make sat-flash SAT=living-room DEVICE=<port-or-ip>   # build and flash
 make sat-logs SAT=living-room DEVICE=<port-or-ip>    # follow the log
+make sat-levels DAYS=7 HA_ENV=<env-file>   # microphone level history of a satellite
 make ww-setup         # wake word: pinned tools, generators and datasets
 make ww-preview       # a few checked samples per pronunciation and voice
 make ww-samples       # synthetic wake word and confusable samples

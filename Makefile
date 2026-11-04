@@ -3,6 +3,7 @@
 	llm-proxy-test stt-bridge-test \
 	wall-display-check wall-display-diff wall-display-deploy wall-display-test \
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
+	sat-levels \
 	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-pull \
 	ww-import ww-features ww-train ww-evaluate
 
@@ -28,6 +29,10 @@ HA_ENV ?= .env
 WALL_DISPLAY := uv run --no-project --python 3.12 --with pyyaml==6.0.3 \
 	--with websockets==16.0 python scripts/wall_display_deploy.py
 WALL_DISPLAY_HA = $(if $(wildcard $(HA_ENV)),--env-file $(HA_ENV)) $(if $(YES),--yes)
+
+# Microphone level history of a satellite, see docs/microphone_levels.md.
+SAT_LEVELS := uv run --no-project --python 3.12 --with websockets==16.0 \
+	python scripts/satellite_levels.py
 
 dev-up:
 	docker compose -f compose/dev/docker-compose.yml up -d
@@ -95,6 +100,12 @@ wall-display-test:
 
 eval:
 	python training/eval/eval_tool_call_validity.py --dataset dev/datasets/llm
+
+# Microphone levels of a satellite from Home Assistant (docs/microphone_levels.md).
+# DAYS=<n> changes the window, AROUND=<timestamp> adds five minute levels.
+sat-levels:
+	$(SAT_LEVELS) $(if $(DAYS),--days $(DAYS)) $(if $(AROUND),--around $(AROUND)) \
+		$(if $(wildcard $(HA_ENV)),--env-file $(HA_ENV))
 
 sat-config:
 	$(ESPHOME) config $(SAT_CONFIG)

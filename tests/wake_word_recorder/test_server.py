@@ -93,6 +93,34 @@ def test_negative_take_ignores_the_speaker(tmp_path) -> None:
     asyncio.run(run())
 
 
+def test_wake_clip_keeps_the_detection_inside_the_audio(tmp_path) -> None:
+    """A clip holds the pre-roll, so the detection sits inside the file."""
+
+    store = make_store(tmp_path)
+
+    async def run() -> None:
+        async with running(store) as port, Satellite(port) as satellite:
+            await satellite.send(
+                take_start(kind="wake", speaker="Not Checked", seconds=4)
+            )
+            name = (await satellite.answer())["data"]["name"]
+            await satellite.send(
+                chunks(tone(2.0)),
+                detection("Hey AIVI", 2000),
+                chunks(tone(2.0)),
+                audio_stop(),
+            )
+            saved = await satellite.answer()
+            assert saved["data"]["seconds"] == 4.0
+        meta = sidecar(store, f"wake/{name}.json")
+        assert meta["kind"] == "wake"
+        assert meta["speaker"] is None
+        assert meta["detections"] == [{"name": "Hey AIVI", "offset_s": 2.0}]
+        assert files(store) == [f"wake/{name}.json", f"wake/{name}.wav"]
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "changes, code",
     [

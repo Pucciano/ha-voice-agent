@@ -170,7 +170,7 @@ services:
           propagation: rslave
 
   wake-word-recorder:
-    image: aivi/wake-word-recorder:0.1.0
+    image: aivi/wake-word-recorder:0.2.0
     pull_policy: never
     restart: unless-stopped
     user: "1000:1000"
