@@ -186,6 +186,57 @@ it; that is expected.
   the entry, then rename the entity to `automation.smart_meter_data_check`
   once.
 
+## Tariff
+
+Prices live in Home Assistant helpers, never in this repository. Three
+tariff slots, each a set of three UI helpers (not exposed to Assist):
+
+| Helper | Type | Meaning |
+|---|---|---|
+| `input_datetime.electricity_tariff_N_valid_from` "Stromtarif N gültig ab" | date | first day of the tariff |
+| `input_number.electricity_tariff_N_work_price` "Stromtarif N Arbeitspreis" | box, ct/kWh, 0–100, step 0.01 | work price; 0 marks the slot as unused |
+| `input_number.electricity_tariff_N_base_price` "Stromtarif N Grundpreis" | box, EUR per month, 0–100, step 0.01 | monthly base price |
+
+The active slot is the one with the latest date that is not after today
+(local date), so a price change takes effect at midnight of its first day.
+For a new tariff, fill an unused slot or overwrite the oldest past one.
+
+Three helpers derive from the slots:
+
+- **Template sensor "Arbeitspreis aktuell"** (`sensor.electricity_work_price`,
+  EUR/kWh, state template `config/homeassistant/helpers/electricity_work_price.jinja`).
+  The energy dashboard prices the grid import with it ("Use an entity with
+  current price"). Home Assistant then records the cost of every hour at the
+  price valid in that hour as `sensor.bitshake_smartmeterreader_ehz_importactive_cost`.
+- **Template sensor "Grundpreis je Stunde"** (`sensor.electricity_base_rate`,
+  EUR/h, `electricity_base_rate.jinja`): the monthly base price of the active
+  slot spread over the hours of the current month.
+- **Integral helper "Grundpreis"** (`sensor.electricity_base_cost`, source
+  `sensor.electricity_base_rate`, left Riemann sum, time unit hours, 4
+  decimals, max sub-interval 15 minutes): the base price added up in EUR, a
+  statistic next to the energy cost for later evaluations.
+
+Both costs are recorded once and keep their price: changing a slot later
+does not reprice hours that are already recorded. Fix a wrong price in the
+statistics (Developer tools → Statistics → adjust a sum) if it matters. The
+base price only accrues while Home Assistant runs the integral helper; it
+does not start before the helper exists.
+
+Set up on 2026-11-07 without prices: all slots have a work price of 0, so
+the price sensors are `unknown`, `energy/validate` reports the price entity
+as not numeric, no cost is recorded, and the display shows "Tarif fehlt".
+Costs start with the first slot that gets a date and a work price; nothing
+is priced backwards.
+
+The helpers were created over the websocket (`input_datetime/create`,
+`input_number/create`) and the config flows `template` (step `sensor`) and
+`integration`, created with their German names and then renamed to the
+entity ids above; all are unexposed from Assist.
+
+The wall display reads the costs from these statistics (docs/wall_display.md):
+the day view shows the work price only, week, month and year add the base
+price.
+
 ## Testing
 
 - `Status 10` on the reader shows `ImportActive` with decimals and `Power`
