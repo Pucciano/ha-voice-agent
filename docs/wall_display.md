@@ -72,8 +72,9 @@ The data rules:
   and shares need complete periods.
 - Costs come from the recorded cost statistics (docs/smart_meter.md,
   Tariff), so every hour keeps the price of its time. The day shows the work
-  price only; week, month and year add the base price. The running hour is
-  priced at the current work price.
+  price only; week, month and year add the base price. The running hour adds
+  the cost entity's state minus its last recorded hour, as for the meter, so
+  a price set or changed within the hour counts as Home Assistant counts it.
 - Shares cover the recorded hours (no live part, which the plugs do not
   have). A plug inside another listed plug (`included_in_stat`) is not
   counted twice; plugs above the meter show "Messabweichung".
