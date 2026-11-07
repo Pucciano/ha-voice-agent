@@ -235,7 +235,23 @@ Four helpers derive from the slots:
   statistic next to the energy cost for later evaluations.
 
 Both costs are recorded once and keep their price: changing a slot later
-does not reprice hours that are already recorded. Fix a wrong price in the
+does not reprice hours that are already recorded.
+
+**Backfilling the work price cost** for hours recorded before the price
+existed (done for 2026-11-07, 00:41 to 13:34 local, when the cost entity
+started): back up the statistics, then
+
+1. `recorder/import_statistics` for the cost statistic (metadata from
+   `recorder/get_statistics_metadata`, source `recorder`) with one row per
+   missing hour: `sum` = the meter's hourly `sum` × work price;
+2. `recorder/adjust_sum_statistics` from the first existing cost hour by
+   the total missing cost (meter reading at the cost start minus the first
+   reading, × work price). This also shifts the 5-minute statistics, so the
+   next hours continue without a negative step.
+
+Read the hourly rows back: every `change` must be the hour's energy × price.
+The display caches statistics for up to six hours; a dashboard deploy with
+changed code reloads them. Fix a wrong price in the
 statistics (Developer tools → Statistics → adjust a sum) if it matters. The
 base price only accrues while Home Assistant runs the integral helper; it
 does not start before the helper exists.
