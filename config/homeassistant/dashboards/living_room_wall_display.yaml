@@ -23,6 +23,941 @@ button_card_templates:
     variables:
       home_area: living_room
 
+  # ---------------------------------------------------------------- energy --
+  # Grid import from the smart meter (docs/smart_meter.md): the section
+  # "Strom" and the subview `strom`. These templates live here and not in the
+  # shared file, so the bedroom dashboard stays unchanged. Colours come from
+  # the palette of `wd_root`.
+  #
+  # `store` installs one data manager per page in window.wdEnergy. It loads
+  # recorder statistics over the websocket, caches them by request (stale
+  # data stays visible while a newer copy loads) and redraws every
+  # registered card when an answer arrives. A card always reads the cache
+  # key of the period it shows, so a late answer for another period cannot
+  # replace the chart. The pure functions between the energy-lib markers are
+  # tested by tests/wall_display/test_energy_logic.py.
+  wd_energy_base:
+    template: wd_base
+    variables:
+      energy_entity: sensor.bitshake_smartmeterreader_ehz_importactive
+      power_entity: sensor.bitshake_smartmeterreader_ehz_power
+      # Tariff (docs/smart_meter.md): the work price valid now, the grid cost
+      # that the energy dashboard records with it, and the base price added
+      # up by an Integral helper. Both costs are recorder statistics, so every
+      # period keeps the prices that were valid at the time.
+      price_entity: sensor.electricity_work_price
+      cost_entity: sensor.bitshake_smartmeterreader_ehz_importactive_cost
+      base_entity: sensor.electricity_base_cost
+      tariff_slots: 3
+      store:
+        force_eval: true
+        value: |
+          [[[
+            // energy-lib:begin
+            const lib = (() => {
+              const HOUR = 3600000;
+              const startOfDay = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+              const addDays = (t, n) => {
+                const d = new Date(t); d.setDate(d.getDate() + n); d.setHours(0, 0, 0, 0); return d.getTime();
+              };
+              const addMonths = (t, n) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth() + n, 1).getTime(); };
+              const startOfWeek = (t) => { const d = new Date(startOfDay(t)); return addDays(d.getTime(), -((d.getDay() + 6) % 7)); };
+              const nextHour = (t) => Math.floor(t / HOUR) * HOUR + HOUR;
+
+              // A calendar period in local time; offset 0 is the current one.
+              // `stat` is the statistics period of its bars.
+              const range = (period, offset, now) => {
+                let start; let end; let stat;
+                if (period === 'day') {
+                  start = addDays(startOfDay(now), offset); end = addDays(start, 1); stat = 'hour';
+                } else if (period === 'week') {
+                  start = addDays(startOfWeek(now), 7 * offset); end = addDays(start, 7); stat = 'day';
+                } else if (period === 'month') {
+                  start = addMonths(now, offset); end = addMonths(start, 1); stat = 'day';
+                } else {
+                  const y = new Date(now).getFullYear() + offset;
+                  start = new Date(y, 0, 1).getTime(); end = new Date(y + 1, 0, 1).getTime(); stat = 'month';
+                }
+                return { period, offset, start, end, stat };
+              };
+
+              // Bar slots: hours step in UTC (23 or 25 on the DST days), days
+              // and months follow the local calendar.
+              const slots = (r) => {
+                const out = [];
+                for (let t = r.start; t < r.end;) {
+                  const next = r.stat === 'hour' ? t + HOUR : r.stat === 'day' ? addDays(t, 1) : addMonths(t, 1);
+                  out.push({ start: t, end: next });
+                  t = next;
+                }
+                return out;
+              };
+
+              // One bar per slot. status: future, none (before the first
+              // statistic), gap (no statistic row), current (running slot,
+              // plus the live meter delta) or done. A missing row is never 0.
+              // `partial` marks the slot that holds the first statistic hour,
+              // which only covers part of that hour.
+              const bars = (r, rows, now, dataStart, live = 0) => {
+                const byStart = new Map((rows || []).map((x) => [x.start, x]));
+                return slots(r).map((s) => {
+                  const row = byStart.get(s.start);
+                  const change = row && Number.isFinite(row.change) ? row.change : null;
+                  // `stat` is the statistic alone, without the live delta.
+                  const b = { start: s.start, end: s.end, value: null, stat: null, status: 'future', partial: false,
+                    reset: false };
+                  if (s.start > now) return b;
+                  if (dataStart == null || s.end <= dataStart) { b.status = 'none'; return b; }
+                  b.partial = s.start <= dataStart;
+                  b.reset = change !== null && change < 0;
+                  const v = change === null ? null : Math.max(change, 0);
+                  b.stat = v;
+                  if (s.end > now) {
+                    b.status = 'current';
+                    b.value = (v ?? 0) + Math.max(live, 0);
+                    return b;
+                  }
+                  b.status = row ? 'done' : 'gap';
+                  b.value = v;
+                  return b;
+                });
+              };
+
+              const summary = (bs) => {
+                const seen = bs.filter((b) => b.status !== 'future');
+                const add = (list) => list.reduce((a, b) => a + (b.value ?? 0), 0);
+                return {
+                  total: add(seen),
+                  closed: add(bs.filter((b) => b.status === 'done')),
+                  hasData: seen.some((b) => b.value !== null),
+                  complete: seen.length > 0
+                    && seen.every((b) => ['done', 'current'].includes(b.status) && !b.partial),
+                  partial: seen.some((b) => b.partial || b.status === 'none'),
+                  gaps: seen.filter((b) => b.status === 'gap').length,
+                  reset: seen.some((b) => b.reset),
+                };
+              };
+
+              // Current period against the previous one over the same closed
+              // part: same clock time for days (DST safe), same number of bars
+              // otherwise. Null unless every bar in both windows is complete.
+              const compare = (cur, prev, period) => {
+                let k = 0;
+                while (k < cur.length && cur[k].status === 'done') k += 1;
+                if (!k || !prev.length) return null;
+                const ok = (b) => b && b.status === 'done' && !b.partial;
+                const curSel = cur.slice(0, k);
+                let prevSel;
+                if (period === 'day') {
+                  const end = new Date(curSel[k - 1].end);
+                  const until = new Date(prev[0].start);
+                  until.setHours(end.getHours() === 0 ? 24 : end.getHours(), 0, 0, 0);
+                  prevSel = prev.filter((b) => b.end <= until.getTime());
+                } else {
+                  prevSel = prev.slice(0, k);
+                  if (prevSel.length < k) return null;
+                }
+                if (!prevSel.length || !curSel.every(ok) || !prevSel.every(ok)) return null;
+                const a = curSel.reduce((x, b) => x + b.value, 0);
+                const p = prevSel.reduce((x, b) => x + b.value, 0);
+                return { bars: k, full: k === cur.length, end: curSel[k - 1].end, cur: a, prev: p,
+                  pct: p > 0 ? (a - p) / p * 100 : null };
+              };
+
+              // Today from hourly rows starting before yesterday: closed hours
+              // plus the meter reading minus the last compiled hour.
+              const today = (rows, meter, now, dataStart) => {
+                const sorted = (rows || []).filter((x) => Number.isFinite(x.state)).sort((a, b) => a.start - b.start);
+                const last = sorted[sorted.length - 1];
+                let live = 0; let reset = false;
+                const meterOk = Number.isFinite(meter);
+                if (last && meterOk) {
+                  live = meter - last.state;
+                  if (live < 0) { live = 0; reset = true; }
+                }
+                const cur = bars(range('day', 0, now), rows, now, dataStart, live);
+                const prev = bars(range('day', -1, now), rows, now, dataStart, 0);
+                const sum = summary(cur);
+                return { ...sum, bars: cur, live, meterOk, reset: reset || sum.reset, compare: compare(cur, prev, 'day') };
+              };
+
+              const peak = (rows) => {
+                const v = (rows || []).map((x) => x.max).filter(Number.isFinite);
+                return v.length ? Math.max(...v) : null;
+              };
+
+              // Lowest hourly mean of the closed hours in the last 24 h.
+              const lowestMean = (rows, now) => {
+                const v = (rows || []).filter((x) => x.end <= now && x.start >= now - 25 * HOUR)
+                  .map((x) => x.mean).filter(Number.isFinite);
+                return v.length >= 12 ? Math.min(...v) : null;
+              };
+
+              // Year projection from complete days only, from seven days on.
+              const projection = (dayRows, now, dataStart) => {
+                if (dataStart == null) return null;
+                const t0 = startOfDay(now);
+                const days = (dayRows || []).filter((x) => x.start > dataStart && x.end <= t0
+                  && Number.isFinite(x.change) && x.change >= 0);
+                if (days.length < 7) return { days: days.length, kwh: null };
+                return { days: days.length, kwh: days.reduce((a, x) => a + x.change, 0) / days.length * 365 };
+              };
+
+              // Name of a device from the energy settings: its own name, a
+              // specific entity name, or the device name without "Steckdose".
+              const deviceName = (dc, i, entities, devices) => {
+                if (dc.name) return dc.name;
+                const ent = entities?.[dc.stat_consumption];
+                if (ent?.name && !/^(energie|energy|verbrauch)$/i.test(ent.name.trim())) return ent.name;
+                const dev = ent?.device_id ? devices?.[ent.device_id] : null;
+                const name = (dev?.name_by_user || dev?.name || '').replace(/^steckdose\s+/i, '').trim();
+                return name || `Gerät ${i + 1}`;
+              };
+
+              // Devices over the compiled statistics of the grid: closed bars
+              // and the compiled part of the running one, never the live
+              // delta, which the plugs do not have. A share needs the grid and
+              // the device to cover every such bar; devices inside another
+              // listed device (included_in_stat) are not counted twice.
+              const consumers = (devices, rowsById, gridBars) => {
+                const done = gridBars.filter((b) => ['done', 'current'].includes(b.status) && b.stat !== null);
+                const gridOk = done.length > 0
+                  && gridBars.every((b) => !['none', 'gap'].includes(b.status) && !b.partial);
+                const grid = done.reduce((a, b) => a + b.stat, 0);
+                const ids = new Set(devices.map((d) => d.stat));
+                const items = devices.map((d) => {
+                  const rows = new Map((rowsById[d.stat] || []).map((x) => [x.start, x]));
+                  let value = 0; let covered = done.length > 0; let any = false;
+                  done.forEach((b) => {
+                    const x = rows.get(b.start);
+                    if (!x || !Number.isFinite(x.change)) { covered = false; return; }
+                    any = true; value += Math.max(x.change, 0);
+                  });
+                  return { ...d, value: any ? value : null, covered, top: !d.parent || !ids.has(d.parent),
+                    share: gridOk && covered && grid > 0 ? value / grid : null };
+                }).sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
+                const top = items.filter((i) => i.top);
+                const rest = gridOk && top.every((i) => i.covered)
+                  ? grid - top.reduce((a, i) => a + i.value, 0) : null;
+                return { items, grid, gridOk, rest: rest !== null && rest >= 0 ? rest : null,
+                  mismatch: rest !== null && rest < 0 ? -rest : null };
+              };
+
+              const num = (v, d) => v.toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d });
+              const kwhDigits = (v) => (v < 1 ? 2 : v < 100 ? 1 : 0);
+              const fmt = {
+                kwhNum: (v) => (v == null ? '–' : num(v, kwhDigits(v))),
+                kwh: (v) => (v == null ? '–' : `${num(v, kwhDigits(v))} kWh`),
+                watts: (w) => (w == null ? '–' : w < 1000 ? `${Math.round(w)} W` : `${num(w / 1000, 1)} kW`),
+                euro: (v) => `${num(v, 2)} €`,
+                pct: (v) => `${v > 0.5 ? '+' : v < -0.5 ? '−' : '±'}${num(Math.abs(v), 0)} %`,
+                share: (v) => (v == null ? '–' : `${num(v * 100, 0)} %`),
+              };
+
+              const isoWeek = (t) => {
+                const d = new Date(t); d.setHours(0, 0, 0, 0);
+                d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+                const w1 = new Date(d.getFullYear(), 0, 4);
+                return 1 + Math.round(((d - w1) / 86400000 - 3 + ((w1.getDay() + 6) % 7)) / 7);
+              };
+              const title = (r) => {
+                const s = new Date(r.start);
+                const e = new Date(r.end - 1);
+                const month = (d) => d.toLocaleDateString('de-DE', { month: 'short' }).replace('.', '');
+                if (r.period === 'day') {
+                  if (r.offset === 0) return 'Heute';
+                  if (r.offset === -1) return 'Gestern';
+                  return s.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
+                }
+                if (r.period === 'week') {
+                  const from = s.getMonth() === e.getMonth() ? `${s.getDate()}.` : `${s.getDate()}. ${month(s)}`;
+                  return `KW ${isoWeek(r.start)} · ${from}–${e.getDate()}. ${month(e)}`;
+                }
+                if (r.period === 'month') return s.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+                return String(s.getFullYear());
+              };
+
+              // Axis labels as [index, text].
+              const axis = (r, bs) => {
+                if (r.stat === 'hour') {
+                  const seen = new Set();
+                  return bs.map((b, i) => [i, new Date(b.start).getHours()])
+                    .filter(([, h]) => h % 6 === 0 && !seen.has(h) && seen.add(h)).map(([i, h]) => [i, `${h}`]);
+                }
+                if (r.period === 'week') {
+                  return bs.map((b, i) => [i, new Date(b.start).toLocaleDateString('de-DE', { weekday: 'short' }).slice(0, 2)]);
+                }
+                if (r.period === 'month') {
+                  return bs.map((b, i) => [i, new Date(b.start).getDate()])
+                    .filter(([, d]) => [1, 8, 15, 22, 29].includes(d)).map(([i, d]) => [i, `${d}.`]);
+                }
+                return bs.map((b, i) => [i, 'JFMAMJJASOND'[new Date(b.start).getMonth()]]);
+              };
+
+              // Bars as HTML: done in the accent colour, the running and the
+              // partial slot lighter, a gap as a dashed outline, the future
+              // and time before the first statistic as a flat track.
+              const chart = (bs, labels, height) => {
+                const top = Math.max(...bs.map((b) => b.value ?? 0), 0) || 1;
+                const gap = bs.length > 26 ? 2 : 3;
+                const cols = bs.map((b) => {
+                  let inner;
+                  if (['future', 'none'].includes(b.status)) {
+                    inner = '<span style="display:block;height:3px;border-radius:2px;background:var(--wd-track)"></span>';
+                  } else if (b.status === 'gap') {
+                    inner = `<span style="display:block;height:${Math.round(height * 0.3)}px;box-sizing:border-box;
+                      border-radius:3px;border:1px dashed var(--wd-line-strong)"></span>`;
+                  } else {
+                    const h = Math.max(3, Math.round((b.value ?? 0) / top * height));
+                    const light = b.status === 'current' || b.partial;
+                    inner = `<span style="display:block;height:${h}px;border-radius:3px;background:#A86F43;
+                      opacity:${light ? 0.45 : 1}"></span>`;
+                  }
+                  return `<span style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;
+                    height:${height}px">${inner}</span>`;
+                }).join('');
+                const n = bs.length;
+                const ticks = labels.map(([i, text]) => `<span style="position:absolute;top:0;left:${((i + 0.5) / n * 100).toFixed(2)}%;
+                  transform:translateX(-50%);white-space:nowrap">${text}</span>`).join('');
+                return `<div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="display:flex;align-items:flex-end;gap:${gap}px">${cols}</div>
+                  <div style="position:relative;height:14px;font-size:11px;line-height:14px;color:var(--wd-muted);
+                    font-variant-numeric:tabular-nums">${ticks}</div></div>`;
+              };
+
+              // Tariff slots [{slot, start 'YYYY-MM-DD', work ct/kWh, base EUR}]
+              // as in the helper templates: unused slots (work 0, no date)
+              // dropped, sorted by date, the latest one not after `today`
+              // active, later ones planned, earlier ones past.
+              const tariffs = (list, today) => {
+                const used = list.filter((x) => x.work > 0 && /^\d{4}-\d{2}-\d{2}$/.test(x.start || ''))
+                  .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : a.slot - b.slot));
+                let active = -1;
+                used.forEach((x, i) => { if (x.start <= today && (active < 0 || x.start > used[active].start)) active = i; });
+                return used.map((x, i) => ({ ...x,
+                  status: i === active ? 'active' : x.start > today ? 'planned' : 'past' }));
+              };
+
+              return { HOUR, startOfDay, addDays, addMonths, nextHour, range, slots, bars, summary, compare, today,
+                peak, lowestMean, projection, deviceName, consumers, tariffs, fmt, isoWeek, title, axis, chart };
+            })();
+            // energy-lib:end
+            const VERSION = 2;
+            let s = window.wdEnergy;
+            if (!s || s.version !== VERSION) {
+              s = { version: VERSION, lib, cache: new Map(), inflight: new Map(), cards: new Set(),
+                view: { period: 'day', offset: 0 } };
+              window.wdEnergy = s;
+              const HOUR = lib.HOUR;
+              s.refresh = () => {
+                s.cards.forEach((c) => {
+                  if (c?.isConnected) c.requestUpdate?.('_config');
+                  else s.cards.delete(c);
+                });
+              };
+              s.setView = (view) => { s.view = view; s.refresh(); };
+              // Cached answer (possibly stale) or undefined while the first
+              // answer is loading. `expires` is a timestamp; errors retry
+              // after 30 s.
+              s.get = (msg, expires) => {
+                const key = JSON.stringify(msg);
+                const hit = s.cache.get(key);
+                const now = Date.now();
+                if ((!hit || hit.expires <= now) && !s.inflight.has(key) && s.hass?.connection) {
+                  const done = (entry) => {
+                    s.cache.delete(key);
+                    s.cache.set(key, entry);
+                    while (s.cache.size > 40) s.cache.delete(s.cache.keys().next().value);
+                  };
+                  s.inflight.set(key, s.hass.callWS(msg)
+                    .then((data) => done({ data, expires }))
+                    .catch((err) => done({ error: err?.message || err?.code || String(err), expires: Date.now() + 30000 }))
+                    .finally(() => { s.inflight.delete(key); s.refresh(); }));
+                }
+                return hit;
+              };
+              const iso = (t) => new Date(t).toISOString();
+              s.stats = (ids, period, start, end, types, expires) => {
+                const msg = { type: 'recorder/statistics_during_period', statistic_ids: ids, period,
+                  start_time: iso(start), types };
+                if (end) msg.end_time = iso(end);
+                const hit = s.get(msg, expires);
+                if (!hit) return { loading: true };
+                if (hit.error && !hit.data) return { error: hit.error };
+                return { rows: hit.data };
+              };
+              // Expiry: running periods reload two minutes after the next full
+              // hour (when the hour statistic exists), closed ones after 6 h.
+              s.expires = (now, closed) => (closed ? now + 6 * HOUR : lib.nextHour(now) + 120000);
+              // Start of the first hourly statistic of `id` (default: the
+              // meter), null without any.
+              s.dataStart = (now, id = s.cfg.energy) => {
+                const m = s.stats([id], 'month', Date.UTC(2000, 0, 1), null, ['change'], now + 6 * HOUR);
+                if (!m.rows) return m;
+                const months = m.rows[id] || [];
+                if (!months.length) return { value: null };
+                const h = s.stats([id], 'hour', months[0].start, lib.addMonths(months[0].start, 1), ['change'], now + 6 * HOUR);
+                if (!h.rows) return h;
+                const hours = h.rows[id] || [];
+                return { value: hours.length ? hours[0].start : months[0].start };
+              };
+              s.price = () => {
+                const p = parseFloat(s.hass.states[s.cfg.price]?.state);
+                return Number.isFinite(p) && p > 0 ? p : null;
+              };
+              // A recorded sum statistic (cost) over the bars of `r`, with its
+              // own first statistic, so periods before it are "none".
+              s.series = (id, r, now, live) => {
+                const ds = s.dataStart(now, id);
+                if (!('value' in ds)) return ds;
+                const res = s.stats([id], r.stat, r.start, r.end, ['change'], s.expires(now, r.end <= now));
+                if (!res.rows) return res;
+                const bs = lib.bars(r, res.rows[id] || [], now, ds.value, live);
+                return { start: ds.value, ...lib.summary(bs) };
+              };
+              // Work price cost (energy dashboard) plus, except for a day, the
+              // base price. The running hour is priced at the current work
+              // price; recorded hours keep the price of their time.
+              s.cost = (r, now, liveKwh) => {
+                const price = s.price();
+                const live = r.end > now && price !== null ? liveKwh * price : 0;
+                return { price, work: s.series(s.cfg.cost, r, now, live),
+                  base: r.period === 'day' ? null : s.series(s.cfg.base, r, now, 0) };
+              };
+              s.tariffs = () => {
+                const st = (id) => s.hass.states[id]?.state;
+                const list = [];
+                for (let i = 1; i <= s.cfg.slots; i += 1) {
+                  list.push({ slot: i, start: st(`input_datetime.electricity_tariff_${i}_valid_from`),
+                    work: parseFloat(st(`input_number.electricity_tariff_${i}_work_price`)) || 0,
+                    base: parseFloat(st(`input_number.electricity_tariff_${i}_base_price`)) || 0 });
+                }
+                const d = new Date();
+                const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                return lib.tariffs(list, today);
+              };
+              s.today = (now) => {
+                const id = s.cfg.energy;
+                const ds = s.dataStart(now);
+                if (!('value' in ds)) return ds;
+                const y0 = lib.addDays(lib.startOfDay(now), -1);
+                const h = s.stats([id], 'hour', y0 - 2 * HOUR, null, ['change', 'state'], s.expires(now, false));
+                if (!h.rows) return h;
+                const meter = parseFloat(s.hass.states[id]?.state);
+                return { dataStart: ds.value, ...lib.today(h.rows[id] || [], meter, now, ds.value) };
+              };
+              s.period = (view, now) => {
+                const id = s.cfg.energy;
+                const t = s.today(now);
+                if (!t.bars) return t;
+                const r = lib.range(view.period, view.offset, now);
+                const p = lib.range(view.period, view.offset - 1, now);
+                const closed = r.end <= now;
+                const g = s.stats([id], r.stat, p.start, r.end, ['change'], s.expires(now, closed));
+                if (!g.rows) return g;
+                const rows = g.rows[id] || [];
+                const live = r.end > now ? t.live : 0;
+                const cur = lib.bars(r, rows, now, t.dataStart, live);
+                const prev = lib.bars(p, rows, now, t.dataStart, 0);
+                const pw = s.stats([s.cfg.power], r.stat, r.start, r.end, ['max'], s.expires(now, closed));
+                return { range: r, bars: cur, ...lib.summary(cur), live, dataStart: t.dataStart,
+                  compare: lib.compare(cur, prev, view.period), peak: pw.rows ? lib.peak(pw.rows[s.cfg.power]) : null };
+              };
+              s.figures = (now) => {
+                const id = s.cfg.energy;
+                const low = s.stats([s.cfg.power], 'hour', Math.floor(now / HOUR) * HOUR - 25 * HOUR, null, ['mean'],
+                  s.expires(now, false));
+                const t0 = lib.startOfDay(now);
+                const days = s.stats([id], 'day', lib.addDays(t0, -31), t0, ['change'], lib.addDays(t0, 1) + 120000);
+                const ds = s.dataStart(now);
+                return {
+                  low: low.rows ? lib.lowestMean(low.rows[s.cfg.power], now) : null,
+                  projection: days.rows && 'value' in ds ? lib.projection(days.rows[id], now, ds.value) : null,
+                };
+              };
+              s.consumers = (data, now) => {
+                const prefs = s.get({ type: 'energy/get_prefs' }, now + HOUR);
+                if (!prefs) return { loading: true };
+                if (!prefs.data) return { error: prefs.error };
+                const list = (prefs.data.device_consumption || []).map((dc, i) => ({
+                  stat: dc.stat_consumption, parent: dc.included_in_stat || null,
+                  name: lib.deviceName(dc, i, s.hass.entities, s.hass.devices) }));
+                if (!list.length) return { items: [] };
+                const r = data.range;
+                const d = s.stats(list.map((x) => x.stat), r.stat, r.start, r.end, ['change'], s.expires(now, r.end <= now));
+                if (!d.rows) return d;
+                return lib.consumers(list, d.rows, data.bars);
+              };
+            }
+            s.hass = hass;
+            s.cfg = { energy: variables.energy_entity, power: variables.power_entity, price: variables.price_entity,
+              cost: variables.cost_entity, base: variables.base_entity, slots: variables.tariff_slots };
+            if (this) s.cards.add(this);
+            return s;
+          ]]]
+
+  # Current grid power in the section heading. Highlighted from 3 kW as
+  # increased load, not as a fault.
+  wd_energy_pill:
+    template: wd_pill
+    entity: sensor.bitshake_smartmeterreader_ehz_power
+    name: |
+      [[[
+        const w = parseFloat(entity?.state);
+        if (!Number.isFinite(w)) return 'Zähler offline';
+        return w < 1000 ? `${Math.round(w)} W jetzt` : `${(w / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kW jetzt`;
+      ]]]
+    styles:
+      card:
+        - background: |
+            [[[
+              const w = parseFloat(entity?.state);
+              return !Number.isFinite(w) || w >= 3000 ? 'var(--wd-warn-bg)' : 'var(--wd-accent-bg)';
+            ]]]
+      name:
+        - color: |
+            [[[
+              const w = parseFloat(entity?.state);
+              return !Number.isFinite(w) || w >= 3000 ? 'var(--wd-warn-ink)' : 'var(--wd-ink)';
+            ]]]
+        - font-variant-numeric: tabular-nums
+
+  # The tile on the main view: grid import today, estimated cost, hourly
+  # bars and the comparison with yesterday. A tap opens the subview.
+  wd_energy_card:
+    template: wd_energy_base
+    entity: sensor.bitshake_smartmeterreader_ehz_importactive
+    tap_action:
+      action: navigate
+      navigation_path: /dashboard-living-room-wall-display/strom
+    variables:
+      t: '[[[ return variables.store.today(Date.now()); ]]]'
+      # Work price only, as recorded by the energy dashboard.
+      cost: |
+        [[[
+          const s = variables.store; const t = variables.t;
+          return t.bars ? s.cost(s.lib.range('day', 0, Date.now()), Date.now(), t.live) : null;
+        ]]]
+    styles:
+      card:
+        - padding: 14px 16px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+        - cursor: pointer
+      grid:
+        - grid-template-areas: '"big cost" "bars bars" "foot foot"'
+        - grid-template-columns: minmax(0, 1fr) auto
+        - grid-template-rows: auto auto auto
+        - row-gap: 12px
+        - column-gap: 10px
+        - align-items: start
+      custom_fields:
+        big:
+          - justify-self: start
+        cost:
+          - justify-self: end
+        bars:
+          - justify-self: stretch
+        foot:
+          - justify-self: stretch
+    custom_fields:
+      big: |
+        [[[
+          const t = variables.t; const f = variables.store.lib.fmt;
+          if (t.loading || t.error) {
+            return `<div style="font-size:13px;line-height:17px;color:var(--wd-muted);text-align:left">${t.error
+              ? 'Verbrauch nicht verfügbar' : 'Verbrauch wird geladen …'}</div>`;
+          }
+          let note = 'Netzbezug seit Mitternacht';
+          if (t.dataStart == null) note = 'Noch keine Zählerdaten';
+          else if (!t.meterOk) note = 'Zähler nicht erreichbar · ohne laufende Stunde';
+          else if (t.reset) note = 'Zähler zurückgesetzt · Wert prüfen';
+          else if (t.partial) note = 'Tag unvollständig erfasst';
+          return `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:2px">
+            <span style="display:flex;align-items:baseline;gap:6px">
+              <span style="font-family:var(--wd-display);font-size:40px;line-height:44px;letter-spacing:-0.02em;
+                font-variant-numeric:tabular-nums">${f.kwhNum(t.total)}</span>
+              <span style="font-size:15px;line-height:19px;font-weight:700">kWh heute</span></span>
+            <span style="font-size:12px;line-height:16px;color:var(--wd-muted)">${note}</span></div>`;
+        ]]]
+      cost: |
+        [[[
+          const c = variables.cost; const f = variables.store.lib.fmt;
+          if (!c) return '';
+          const box = (value, sub) => `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;padding-top:8px">
+            ${value ? `<span style="font-size:15px;line-height:19px;font-weight:700;font-variant-numeric:tabular-nums">${value}</span>` : ''}
+            <span style="font-size:12px;line-height:16px;color:var(--wd-muted)">${sub}</span></div>`;
+          if (!c.work?.hasData) return c.price === null ? box('', 'Tarif fehlt') : '';
+          const from = c.work.partial ? `ab ${new Date(c.work.start).getHours()} Uhr` : 'Arbeitspreis';
+          return box(`≈ ${f.euro(c.work.total)}`, from);
+        ]]]
+      bars: |
+        [[[
+          const t = variables.t; const lib = variables.store.lib;
+          if (!t.bars) return '';
+          return lib.chart(t.bars, lib.axis(lib.range('day', 0, Date.now()), t.bars), 44);
+        ]]]
+      foot: |
+        [[[
+          const t = variables.t; const f = variables.store.lib.fmt;
+          if (!t.bars) return '';
+          let text = '';
+          const c = t.compare;
+          if (c && c.pct !== null) {
+            const h = new Date(c.end).getHours();
+            text = `Bis ${h === 0 ? 24 : h} Uhr ${f.pct(c.pct)} ggü. gestern (${f.kwh(c.prev)})`;
+          } else if (t.bars.some((b) => b.status === 'done')) {
+            text = 'Vergleich mit gestern erst nach einem vollständigen Tag';
+          }
+          return `<div style="display:flex;align-items:center;gap:8px;font-size:12px;line-height:16px">
+            <span style="flex:1;min-width:0;text-align:left;color:var(--wd-muted);white-space:nowrap;overflow:hidden;
+              text-overflow:ellipsis">${text}</span>
+            <span style="font-weight:700;white-space:nowrap">Verlauf ›</span></div>`;
+        ]]]
+
+  # ------------------------------------------------------- energy subview --
+  wd_energy_topbar:
+    template: wd_base
+    styles:
+      grid:
+        - grid-template-areas: '"back title"'
+        - grid-template-columns: auto minmax(0, 1fr)
+        - grid-template-rows: 44px
+        - column-gap: 14px
+        - align-items: center
+      custom_fields:
+        title:
+          - justify-self: start
+    custom_fields:
+      title: |
+        [[[
+          return `<div style="display:flex;flex-direction:column;align-items:flex-start">
+            <span style="font-family:var(--wd-display);font-size:30px;line-height:32px;letter-spacing:-0.01em">Strom</span>
+            <span style="font-size:12px;line-height:16px;color:var(--wd-muted)">Netzbezug am Stromzähler</span></div>`;
+        ]]]
+
+  # Back to the main view; resets the subview to today.
+  wd_energy_back:
+    template: wd_base
+    show_name: true
+    show_icon: true
+    icon: mdi:chevron-left
+    name: Zurück
+    tap_action:
+      action: multi-actions
+      actions:
+        - action: javascript
+          javascript: "[[[ window.wdEnergy?.setView({ period: 'day', offset: 0 }); ]]]"
+        - action: navigate
+          navigation_path: /dashboard-living-room-wall-display/home
+    styles:
+      card:
+        - height: 36px
+        - padding: 0 14px 0 8px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - border: 1px solid var(--wd-line-strong)
+        - cursor: pointer
+      grid:
+        - grid-template-areas: '"i n"'
+        - grid-template-columns: 20px auto
+        - column-gap: 4px
+      icon:
+        - width: 20px
+        - color: var(--wd-ink)
+      name:
+        - font-size: 13px
+        - font-weight: 700
+
+  # Day, week, month or year. Looks like a room chip, but only changes the
+  # period of the subview.
+  wd_energy_period_chip:
+    template: wd_energy_base
+    show_name: true
+    variables:
+      selected: '[[[ return variables.store.view.period === variables.period; ]]]'
+    tap_action:
+      action: javascript
+      javascript: "[[[ window.wdEnergy?.setView({ period: variables.period, offset: 0 }); ]]]"
+    styles:
+      card:
+        - height: 36px
+        - padding: 0 10px
+        - box-sizing: border-box
+        - border-radius: 18px
+        - cursor: pointer
+        - background: "[[[ return variables.selected ? 'var(--wd-play-bg)' : 'transparent'; ]]]"
+        - border: "[[[ return variables.selected ? '1px solid transparent' : '1px solid var(--wd-line-strong)'; ]]]"
+      name:
+        - font-size: 13px
+        - font-weight: 700
+        - color: "[[[ return variables.selected ? 'var(--wd-play-fg)' : 'var(--wd-ink)'; ]]]"
+
+  # Previous or next period (variables.step -1 or 1); never into the
+  # future, never before the first statistic.
+  wd_energy_step:
+    template: wd_energy_base
+    show_icon: true
+    icon: "[[[ return variables.step < 0 ? 'mdi:chevron-left' : 'mdi:chevron-right'; ]]]"
+    variables:
+      enabled: |
+        [[[
+          const s = variables.store; const v = s.view;
+          const offset = v.offset + variables.step;
+          if (offset > 0) return false;
+          if (variables.step > 0) return true;
+          const ds = s.dataStart(Date.now());
+          return ds.value != null && s.lib.range(v.period, offset, Date.now()).end > ds.value;
+        ]]]
+    tap_action:
+      action: javascript
+      javascript: |
+        [[[
+          const s = window.wdEnergy;
+          if (s && variables.enabled) s.setView({ ...s.view, offset: s.view.offset + variables.step });
+        ]]]
+    styles:
+      card:
+        - width: 36px
+        - height: 36px
+        - border-radius: 18px
+        - background: var(--wd-surface2)
+        - cursor: "[[[ return variables.enabled ? 'pointer' : 'default'; ]]]"
+        - opacity: "[[[ return variables.enabled ? 1 : 0.35; ]]]"
+      icon:
+        - width: 20px
+        - color: var(--wd-ink)
+
+  # Chart of the selected period with total, cost, comparison and figures.
+  wd_energy_detail:
+    template: wd_energy_base
+    entity: sensor.bitshake_smartmeterreader_ehz_importactive
+    variables:
+      d: '[[[ return variables.store.period(variables.store.view, Date.now()); ]]]'
+      figures: '[[[ return variables.store.figures(Date.now()); ]]]'
+    styles:
+      card:
+        - padding: 14px 16px 16px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+      grid:
+        - grid-template-areas: '"prev ptitle next" "total total total" "chart chart chart" "figures figures figures"'
+        - grid-template-columns: 36px minmax(0, 1fr) 36px
+        - grid-template-rows: 36px auto auto auto
+        - row-gap: 14px
+        - align-items: center
+      custom_fields:
+        ptitle:
+          - font-size: 15px
+          - font-weight: 800
+          - white-space: nowrap
+          - overflow: hidden
+          - text-overflow: ellipsis
+        total:
+          - justify-self: stretch
+        # button-card sets nowrap on custom fields; these hold wrapping text.
+        chart:
+          - justify-self: stretch
+          - white-space: normal
+        figures:
+          - justify-self: stretch
+          - white-space: normal
+    custom_fields:
+      ptitle: '[[[ return variables.store.lib.title(variables.store.lib.range(variables.store.view.period, variables.store.view.offset, Date.now())); ]]]'
+      total: |
+        [[[
+          const d = variables.d; const s = variables.store; const f = s.lib.fmt;
+          if (d.loading || d.error) {
+            return `<div style="font-size:13px;color:var(--wd-muted);text-align:left">${d.error
+              ? 'Statistik nicht verfügbar' : 'Wird geladen …'}</div>`;
+          }
+          if (!d.hasData) {
+            const from = d.dataStart != null
+              ? ` · Daten ab ${new Date(d.dataStart).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}` : '';
+            return `<div style="font-size:13px;line-height:17px;color:var(--wd-muted);text-align:left">Keine Daten für diesen Zeitraum${from}</div>`;
+          }
+          // Costs from the recorded statistics: the work price of each hour,
+          // and from a week on the base price as well. A day shows only the
+          // work price.
+          const k = s.cost(d.range, Date.now(), d.live);
+          const date = (t) => new Date(t).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+          let costs = '';
+          const sub = (text) => `<span style="font-size:12px;line-height:16px;color:var(--wd-muted);text-align:right;
+            white-space:nowrap">${text}</span>`;
+          if (k.work?.hasData) {
+            const base = k.base?.hasData ? k.base.total : null;
+            const lines = [];
+            if (d.range.period === 'day') lines.push(k.work.partial ? `Arbeitspreis ab ${new Date(k.work.start).getHours()} Uhr` : 'Arbeitspreis');
+            else {
+              lines.push(`Arbeitspreis ${f.euro(k.work.total)}${k.work.partial ? ` ab ${date(k.work.start)}` : ''}`);
+              lines.push(base === null ? 'ohne Grundpreis' : `Grundpreis ${f.euro(base)}${k.base.partial ? ` ab ${date(k.base.start)}` : ''}`);
+            }
+            costs = `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;padding-top:8px">
+              <span style="font-size:15px;line-height:19px;font-weight:700;font-variant-numeric:tabular-nums">≈ ${f.euro(k.work.total + (base ?? 0))}</span>
+              ${lines.map(sub).join('')}</div>`;
+          } else if (k.price === null) {
+            costs = `<div style="padding-top:8px">${sub('Tarif fehlt')}</div>`;
+          }
+          const names = { day: 'Vortag', week: 'Vorwoche', month: 'Vormonat', year: 'Vorjahr' };
+          const c = d.compare;
+          let cmp = '';
+          if (c && c.pct !== null) {
+            cmp = c.full ? `${f.pct(c.pct)} ggü. ${names[d.range.period]} (${f.kwh(c.prev)})`
+              : `${f.pct(c.pct)} ggü. gleichem Abschnitt ${names[d.range.period]} (${f.kwh(c.prev)})`;
+          }
+          const notes = [];
+          if (d.partial) notes.push(`unvollständig erfasst · Daten ab ${new Date(d.dataStart).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}`);
+          if (d.gaps) notes.push(`${d.gaps} ${d.gaps === 1 ? 'Lücke' : 'Lücken'} in der Statistik`);
+          if (d.reset) notes.push('Zähler zurückgesetzt');
+          const line = (text, color) => (text ? `<span style="font-size:12px;line-height:16px;color:${color}">${text}</span>` : '');
+          return `<div style="display:flex;align-items:flex-start;gap:10px">
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left">
+              <span style="display:flex;align-items:baseline;gap:6px">
+                <span style="font-family:var(--wd-display);font-size:40px;line-height:44px;letter-spacing:-0.02em;
+                  font-variant-numeric:tabular-nums">${f.kwhNum(d.total)}</span>
+                <span style="font-size:15px;font-weight:700">kWh</span></span>
+              ${line(cmp, 'var(--wd-muted)')}${line(notes.join(' · '), 'var(--wd-warn-ink)')}</div>
+            ${costs}</div>`;
+        ]]]
+      chart: |
+        [[[
+          const d = variables.d; const lib = variables.store.lib;
+          if (!d.bars || !d.hasData) return '';
+          // Highest closed bar; the running one only while none is closed.
+          const closed = d.bars.filter((b) => b.status === 'done' && b.value !== null);
+          const done = closed.length ? closed : d.bars.filter((b) => b.value !== null);
+          const max = done.reduce((a, b) => (b.value > (a?.value ?? -1) ? b : a), null);
+          const when = (b) => (d.range.stat === 'hour' ? `${new Date(b.start).getHours()} Uhr`
+            : d.range.stat === 'day' ? new Date(b.start).toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric' })
+              : new Date(b.start).toLocaleDateString('de-DE', { month: 'long' }));
+          const unit = { hour: 'Höchste Stunde', day: 'Höchster Tag', month: 'Höchster Monat' }[d.range.stat];
+          return `<div style="display:flex;flex-direction:column;gap:8px">
+            ${lib.chart(d.bars, lib.axis(d.range, d.bars), 120)}
+            <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:16px;color:var(--wd-muted)">
+              <span style="text-align:left">${unit}: ${lib.fmt.kwh(max?.value)} · ${max ? when(max) : ''}</span>
+              ${d.bars.some((b) => b.status === 'current') ? '<span style="text-align:right">hell = läuft noch</span>' : ''}</div></div>`;
+        ]]]
+      figures: |
+        [[[
+          const d = variables.d; const g = variables.figures; const f = variables.store.lib.fmt;
+          if (!d.bars) return '';
+          const p = g.projection;
+          const box = (label, value, sub) => `<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;
+              padding:10px;box-sizing:border-box;border-radius:14px;background:var(--wd-surface2);text-align:left">
+            <span style="font-size:11px;line-height:14px;color:var(--wd-muted)">${label}</span>
+            <span style="font-size:16px;line-height:20px;font-weight:800;font-variant-numeric:tabular-nums">${value}</span>
+            <span style="font-size:11px;line-height:14px;color:var(--wd-muted)">${sub}</span></div>`;
+          return `<div style="display:flex;gap:8px">
+            ${box('Niedrigstes Stundenmittel', f.watts(g.low), 'letzte 24 h')}
+            ${box('Gemessene Spitze', f.watts(d.peak), 'im Zeitraum')}
+            ${box('Hochrechnung Jahr', p?.kwh != null ? f.kwh(p.kwh) : '–',
+              p?.kwh != null ? `vorläufig · ${p.days} Tage` : `ab 7 vollen Tagen${p ? ` (${p.days})` : ''}`)}</div>`;
+        ]]]
+
+  # Largest consumers with their own energy plug, from the energy settings.
+  wd_energy_consumers:
+    template: wd_energy_base
+    entity: sensor.bitshake_smartmeterreader_ehz_importactive
+    variables:
+      c: |
+        [[[
+          const s = variables.store; const d = s.period(s.view, Date.now());
+          if (!d.bars) return d;
+          return { range: d.range, ...s.consumers(d, Date.now()) };
+        ]]]
+    styles:
+      card:
+        - padding: 14px 16px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+      grid:
+        - grid-template-areas: '"list"'
+        - grid-template-columns: minmax(0, 1fr)
+      custom_fields:
+        list:
+          - justify-self: stretch
+          - white-space: normal
+    custom_fields:
+      list: |
+        [[[
+          const c = variables.c; const s = variables.store; const f = s.lib.fmt;
+          const muted = (text) => `<div style="font-size:13px;line-height:17px;color:var(--wd-muted);text-align:left">${text}</div>`;
+          if (c.loading) return muted('Wird geladen …');
+          if (c.error) return muted('Verbraucher nicht verfügbar');
+          if (!c.items?.length) return muted('Keine Geräte im Energie-Dashboard');
+          const row = (name, value, share, color, indent) => `<div style="display:flex;flex-direction:column;gap:4px">
+            <div style="display:flex;align-items:baseline;gap:8px;font-size:13px;line-height:17px;font-variant-numeric:tabular-nums">
+              <span style="flex:1;min-width:0;text-align:left;font-weight:700;white-space:nowrap;overflow:hidden;
+                text-overflow:ellipsis;padding-left:${indent ? 14 : 0}px">${indent ? '↳ ' : ''}${name}</span>
+              <span style="color:var(--wd-muted)">${value == null ? 'keine Daten' : f.kwh(value)}</span>
+              <span style="width:38px;text-align:right;font-weight:700">${f.share(share)}</span></div>
+            <span style="display:block;height:6px;border-radius:3px;background:var(--wd-track)">
+              <span style="display:block;height:6px;width:${share == null ? 0 : Math.min(share * 100, 100).toFixed(1)}%;
+                border-radius:3px;background:${color}"></span></span></div>`;
+          const rows = c.items.map((i) => row(i.name, i.value, i.share, '#A86F43', !i.top));
+          if (c.rest !== null) rows.push(row('Nicht einzeln erfasst', c.rest, c.grid > 0 ? c.rest / c.grid : null, 'var(--wd-muted)', false));
+          let note = 'Anteile am Netzbezug bis zur letzten vollen Stunde.';
+          if (!c.gridOk) note = 'Anteile erst für vollständig erfasste Zeiträume.';
+          if (c.mismatch !== null) note = `Messabweichung: Steckdosen zusammen ${f.kwh(c.mismatch)} über dem Zähler.`;
+          return `<div style="display:flex;flex-direction:column;gap:12px">${rows.join('')}
+            <div style="font-size:11px;line-height:14px;color:var(--wd-muted);text-align:left">${note}</div></div>`;
+        ]]]
+
+  # Tariff slots from the helpers, read only: valid from, work price, base
+  # price and whether a slot is active, planned or past. They are edited
+  # under Settings → Devices & services → Helpers ("Stromtarif").
+  wd_energy_tariffs:
+    template: wd_energy_base
+    entity: sensor.electricity_work_price
+    styles:
+      card:
+        - padding: 14px 16px
+        - box-sizing: border-box
+        - border-radius: 22px
+        - background: var(--wd-card)
+        - box-shadow: var(--wd-shadow)
+      grid:
+        - grid-template-areas: '"list"'
+        - grid-template-columns: minmax(0, 1fr)
+      custom_fields:
+        list:
+          - justify-self: stretch
+          - white-space: normal
+    custom_fields:
+      list: |
+        [[[
+          const s = variables.store; const f = s.lib.fmt;
+          const list = s.tariffs();
+          const muted = 'font-size:11px;line-height:14px;color:var(--wd-muted);text-align:left';
+          const where = `<div style="${muted}">Ändern unter Einstellungen → Geräte &amp; Dienste → Helfer „Stromtarif“.
+            Bereits erfasste Stunden behalten ihren Preis.</div>`;
+          if (!list.length) {
+            return `<div style="display:flex;flex-direction:column;gap:8px">
+              <div style="font-size:13px;line-height:17px;font-weight:700;color:var(--wd-warn-ink);text-align:left">Kein Tarif eingetragen</div>${where}</div>`;
+          }
+          const ct = (v) => `${v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ct/kWh`;
+          const day = (iso) => iso.split('-').reverse().join('.');
+          const tag = { active: ['aktiv', 'var(--wd-ok-bg)', 'var(--wd-ok-ink)'], planned: ['geplant', 'var(--wd-accent-bg)', 'var(--wd-ink)'],
+            past: ['abgelaufen', 'transparent', 'var(--wd-muted)'] };
+          const rows = list.map((x) => {
+            const [label, bg, ink] = tag[x.status];
+            const base = x.base > 0 ? `${f.euro(x.base)}/Monat` : '<span style="color:var(--wd-warn-ink)">Grundpreis fehlt</span>';
+            return `<div style="display:flex;align-items:center;gap:10px;opacity:${x.status === 'past' ? 0.6 : 1}">
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;text-align:left">
+                <span style="font-size:13px;line-height:17px;font-weight:700">ab ${day(x.start)}</span>
+                <span style="font-size:12px;line-height:16px;color:var(--wd-muted);font-variant-numeric:tabular-nums">${ct(x.work)} · ${base}</span></div>
+              <span style="height:24px;padding:0 10px;border-radius:12px;display:flex;align-items:center;font-size:11px;
+                font-weight:700;background:${bg};color:${ink};border:1px solid ${x.status === 'past' ? 'var(--wd-line-strong)' : 'transparent'}">${label}</span></div>`;
+          });
+          return `<div style="display:flex;flex-direction:column;gap:12px">${rows.join('')}${where}</div>`;
+        ]]]
+
 views:
   - title: Wohnzimmer
     path: home
@@ -129,6 +1064,20 @@ views:
                       card:
                         type: custom:button-card
                         template: wd_climate_card
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:lightning-bolt-outline
+                    title: Strom
+                  custom_fields:
+                    aside:
+                      card:
+                        type: custom:button-card
+                        template: wd_energy_pill
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_energy_card
                 - type: conditional
                   conditions:
                     - condition: or
@@ -172,3 +1121,92 @@ views:
                               entity: sensor.laundry_dryer_plug_power
                               name: Trockner
                               icon: mdi:tumble-dryer
+
+  # Grid import over time, opened from the tile "Strom". The kiosk mode hides
+  # the header, so the view brings its own back button. `main` holds the
+  # chart, `side` the consumers; they sit side by side on a wide landscape
+  # screen.
+  - title: Strom
+    path: strom
+    subview: true
+    icon: mdi:lightning-bolt-outline
+    type: panel
+    theme: scandi_beige
+    cards:
+      - type: custom:button-card
+        template: wd_root
+        custom_fields:
+          main:
+            card:
+              type: vertical-stack
+              cards:
+                - type: custom:button-card
+                  template: wd_energy_topbar
+                  custom_fields:
+                    back:
+                      card:
+                        type: custom:button-card
+                        template: wd_energy_back
+                - type: grid
+                  columns: 4
+                  square: false
+                  cards:
+                    - type: custom:button-card
+                      template: wd_energy_period_chip
+                      name: Tag
+                      variables:
+                        period: day
+                    - type: custom:button-card
+                      template: wd_energy_period_chip
+                      name: Woche
+                      variables:
+                        period: week
+                    - type: custom:button-card
+                      template: wd_energy_period_chip
+                      name: Monat
+                      variables:
+                        period: month
+                    - type: custom:button-card
+                      template: wd_energy_period_chip
+                      name: Jahr
+                      variables:
+                        period: year
+                - type: custom:button-card
+                  template: wd_energy_detail
+                  custom_fields:
+                    prev:
+                      card:
+                        type: custom:button-card
+                        template: wd_energy_step
+                        variables:
+                          step: -1
+                    next:
+                      card:
+                        type: custom:button-card
+                        template: wd_energy_step
+                        variables:
+                          step: 1
+          side:
+            card:
+              type: vertical-stack
+              cards:
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:power-plug-outline
+                    title: Größte Verbraucher
+                  custom_fields:
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_energy_consumers
+                - type: custom:button-card
+                  template: wd_section
+                  variables:
+                    icon: mdi:cash-multiple
+                    title: Stromtarif
+                  custom_fields:
+                    body:
+                      card:
+                        type: custom:button-card
+                        template: wd_energy_tariffs
