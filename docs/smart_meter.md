@@ -197,11 +197,29 @@ tariff slots, each a set of three UI helpers (not exposed to Assist):
 | `input_number.electricity_tariff_N_work_price` "Stromtarif N Arbeitspreis" | box, ct/kWh, 0–100, step 0.01 | work price; 0 marks the slot as unused |
 | `input_number.electricity_tariff_N_base_price` "Stromtarif N Grundpreis" | box, EUR per month, 0–100, step 0.01 | monthly base price |
 
+Each slot also names its contract, so a period can later be matched to
+supplier and product (a tariff comparison, or an API of the supplier or the
+grid operator):
+
+| Helper | Type | Meaning |
+|---|---|---|
+| `input_text.electricity_tariff_N_provider` "Stromtarif N Anbieter" | text, up to 100 characters | supplier as on the contract |
+| `input_text.electricity_tariff_N_product` "Stromtarif N Tarif" | text, up to 100 characters | product name as on the contract |
+| `input_text.electricity_grid_operator` "Netzbetreiber" | text, up to 100 characters | grid operator of the connection (one for all slots: it belongs to the meter, not to the contract) |
+
+Contract or meter numbers stay out of Home Assistant names and out of this
+repository.
+
 The active slot is the one with the latest date that is not after today
 (local date), so a price change takes effect at midnight of its first day.
 For a new tariff, fill an unused slot or overwrite the oldest past one.
 
-Three helpers derive from the slots:
+Four helpers derive from the slots:
+
+- **Template sensor "Stromtarif aktuell"** (`sensor.electricity_tariff`, text,
+  `electricity_tariff.jinja`): "Anbieter · Tarif" of the active slot, "Tarif N"
+  without names, `unknown` without an active slot. Its history records which
+  contract was valid when.
 
 - **Template sensor "Arbeitspreis aktuell"** (`sensor.electricity_work_price`,
   EUR/kWh, state template `config/homeassistant/helpers/electricity_work_price.jinja`).
@@ -222,14 +240,16 @@ statistics (Developer tools → Statistics → adjust a sum) if it matters. The
 base price only accrues while Home Assistant runs the integral helper; it
 does not start before the helper exists.
 
-Set up on 2026-11-07 without prices: all slots have a work price of 0, so
+Set up on 2026-11-07 without prices or names (the text helpers then report
+`unknown`, which the templates and the display treat as empty): all slots
+have a work price of 0, so
 the price sensors are `unknown`, `energy/validate` reports the price entity
 as not numeric, no cost is recorded, and the display shows "Tarif fehlt".
 Costs start with the first slot that gets a date and a work price; nothing
 is priced backwards.
 
 The helpers were created over the websocket (`input_datetime/create`,
-`input_number/create`) and the config flows `template` (step `sensor`) and
+`input_number/create`, `input_text/create`) and the config flows `template` (step `sensor`) and
 `integration`, created with their German names and then renamed to the
 entity ids above; all are unexposed from Assist.
 

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HELPERS = ROOT / "config/homeassistant/helpers"
 WORK = (HELPERS / "electricity_work_price.jinja").read_text()
 BASE = (HELPERS / "electricity_base_rate.jinja").read_text()
+TARIFF = (HELPERS / "electricity_tariff.jinja").read_text()
 TZ = ZoneInfo("Europe/Berlin")
 
 
@@ -91,6 +92,39 @@ def test_fractional_work_price():
 )
 def test_base_rate_spreads_the_monthly_price_over_the_month(now, base, hours):
     assert render(BASE, TARIFFS, now) == pytest.approx(base / hours, abs=1e-6)
+
+
+def render_text(values, now):
+    env = Environment(undefined=StrictUndefined)
+    env.tests["match"] = lambda value, pattern: re.match(pattern, str(value)) is not None
+    out = env.from_string(TARIFF).render(
+        states=lambda entity: values.get(entity, "unknown"), now=lambda: now, none=None,
+    ).strip()
+    return None if out == "None" else out
+
+
+def named(values, slot, provider, product):
+    return {
+        **values,
+        f"input_text.electricity_tariff_{slot}_provider": provider,
+        f"input_text.electricity_tariff_{slot}_product": product,
+    }
+
+
+def test_tariff_names_follow_the_active_slot():
+    values = named(named(TARIFFS, 1, "Stadtwerke", "Basis"), 2, "Stadtwerke", "Öko 24")
+
+    assert render_text(values, datetime(2026, 12, 31, 23, 59, tzinfo=TZ)) == "Stadtwerke · Basis"
+    assert render_text(values, datetime(2027, 1, 1, 0, 0, tzinfo=TZ)) == "Stadtwerke · Öko 24"
+
+
+def test_tariff_names_fall_back():
+    now = datetime(2026, 11, 7, tzinfo=TZ)
+
+    assert render_text(named(TARIFFS, 1, " Stadtwerke ", ""), now) == "Stadtwerke"
+    assert render_text(named(TARIFFS, 1, "", ""), now) == "Tarif 1"
+    assert render_text(TARIFFS, now) == "Tarif 1"  # helpers missing: unknown
+    assert render_text(slots(("2027-01-01", 31, 0)), now) is None
 
 
 def test_base_rate_without_base_price_is_zero():
