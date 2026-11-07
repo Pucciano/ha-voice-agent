@@ -296,31 +296,54 @@ button_card_templates:
 
               // Bars as HTML: done in the accent colour, the running and the
               // partial slot lighter, a gap as a dashed outline, the future
-              // and time before the first statistic as a flat track.
-              const chart = (bs, labels, height) => {
+              // and time before the first statistic as a flat track. With
+              // `opts.pick` every bar that is not in the future is a tap and
+              // hover target (window.wdEnergy.pick, like the tooltip of the
+              // energy dashboard); `opts.sel` highlights one bar and `opts.tip`
+              // (HTML) floats over the chart above it. A tap on the tip or a
+              // mouse leaving the chart closes it. Pointer events, not click:
+              // button-card's action handler cancels touchend, so a touch never
+              // becomes a click; a scroll ends in pointercancel, not pointerup.
+              const chart = (bs, labels, height, opts = {}) => {
                 const top = Math.max(...bs.map((b) => b.value ?? 0), 0) || 1;
                 const gap = bs.length > 26 ? 2 : 3;
-                const cols = bs.map((b) => {
+                const n = bs.length;
+                const sel = Number.isInteger(opts.sel) && opts.sel >= 0 && opts.sel < n ? opts.sel : null;
+                const call = (arg) => `window.wdEnergy &amp;&amp; window.wdEnergy.pick(${arg})`;
+                const mouse = (arg) => `event.pointerType === 'mouse' &amp;&amp; ${call(arg)}`;
+                const cols = bs.map((b, i) => {
+                  const dim = sel !== null && i !== sel ? 0.45 : 1;
                   let inner;
                   if (['future', 'none'].includes(b.status)) {
                     inner = '<span style="display:block;height:3px;border-radius:2px;background:var(--wd-track)"></span>';
                   } else if (b.status === 'gap') {
                     inner = `<span style="display:block;height:${Math.round(height * 0.3)}px;box-sizing:border-box;
-                      border-radius:3px;border:1px dashed var(--wd-line-strong)"></span>`;
+                      border-radius:3px;border:1px dashed var(--wd-line-strong);opacity:${dim}"></span>`;
                   } else {
                     const h = Math.max(3, Math.round((b.value ?? 0) / top * height));
                     const light = b.status === 'current' || b.partial;
                     inner = `<span style="display:block;height:${h}px;border-radius:3px;background:#A86F43;
-                      opacity:${light ? 0.45 : 1}"></span>`;
+                      opacity:${(light ? 0.45 : 1) * dim}"></span>`;
                   }
-                  return `<span style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;
-                    height:${height}px">${inner}</span>`;
+                  const target = opts.pick && b.status !== 'future';
+                  const on = target ? ` onpointerup="${call(i)}" onpointerenter="${mouse(i)}"` : '';
+                  return `<span${on} style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;
+                    height:${height}px;cursor:${target ? 'pointer' : 'default'}">${inner}</span>`;
                 }).join('');
-                const n = bs.length;
+                let tip = '';
+                if (sel !== null && opts.tip) {
+                  // Edge aligned at the ends, centred in the middle.
+                  const pct = ((sel + 0.5) / n * 100).toFixed(2);
+                  tip = `<div onpointerup="event.stopPropagation(); ${call('null')}" style="position:absolute;top:0;left:${pct}%;transform:translateX(-${pct}%);
+                    z-index:2;padding:8px 10px;box-sizing:border-box;border-radius:12px;background:var(--wd-play-bg);
+                    color:var(--wd-play-fg);box-shadow:var(--wd-shadow);font-size:12px;line-height:16px;text-align:left;
+                    white-space:nowrap;font-variant-numeric:tabular-nums;cursor:pointer">${opts.tip}</div>`;
+                }
+                const leave = opts.pick ? ` onpointerleave="${mouse('null')}"` : '';
                 const ticks = labels.map(([i, text]) => `<span style="position:absolute;top:0;left:${((i + 0.5) / n * 100).toFixed(2)}%;
                   transform:translateX(-50%);white-space:nowrap">${text}</span>`).join('');
                 return `<div style="display:flex;flex-direction:column;gap:6px">
-                  <div style="display:flex;align-items:flex-end;gap:${gap}px">${cols}</div>
+                  <div${leave} style="position:relative;display:flex;align-items:flex-end;gap:${gap}px">${cols}${tip}</div>
                   <div style="position:relative;height:14px;font-size:11px;line-height:14px;color:var(--wd-muted);
                     font-variant-numeric:tabular-nums">${ticks}</div></div>`;
               };
@@ -359,7 +382,15 @@ button_card_templates:
                   else s.cards.delete(c);
                 });
               };
-              s.setView = (view) => { s.view = view; s.refresh(); };
+              // A new period clears the selected bar; `pick` selects one
+              // (null closes the tooltip) and redraws only when it changes.
+              s.setView = (view) => { s.view = { period: view.period, offset: view.offset }; s.refresh(); };
+              s.pick = (i) => {
+                const sel = Number.isInteger(i) ? i : null;
+                if ((s.view.sel ?? null) === sel) return;
+                s.view = { ...s.view, sel };
+                s.refresh();
+              };
               // Cached answer (possibly stale) or undefined while the first
               // answer is loading. `expires` is a timestamp; errors retry
               // after 30 s.
@@ -411,23 +442,33 @@ button_card_templates:
               };
               // A recorded sum statistic (cost) over the bars of `r`, with its
               // own first statistic, so periods before it are "none".
-              s.series = (id, r, now, live) => {
+              // The part of a sum statistic after its last recorded hour:
+              // the entity's state minus that hour's state (never negative).
+              s.live = (id, now) => {
+                const cur = parseFloat(s.hass.states[id]?.state);
+                if (!Number.isFinite(cur)) return 0;
+                const h = s.stats([id], 'hour', Math.floor(now / HOUR) * HOUR - 3 * HOUR, null, ['state'],
+                  s.expires(now, false));
+                const rows = (h.rows?.[id] || []).filter((x) => Number.isFinite(x.state));
+                return rows.length ? Math.max(cur - rows[rows.length - 1].state, 0) : 0;
+              };
+              // A recorded sum statistic (cost) over the bars of `r`, with its
+              // own first statistic, so periods before it are "none". A running
+              // period adds the live part of the entity, as for the meter.
+              s.series = (id, r, now) => {
                 const ds = s.dataStart(now, id);
                 if (!('value' in ds)) return ds;
                 const res = s.stats([id], r.stat, r.start, r.end, ['change'], s.expires(now, r.end <= now));
                 if (!res.rows) return res;
-                const bs = lib.bars(r, res.rows[id] || [], now, ds.value, live);
-                return { start: ds.value, ...lib.summary(bs) };
+                const bs = lib.bars(r, res.rows[id] || [], now, ds.value, r.end > now ? s.live(id, now) : 0);
+                return { start: ds.value, bars: bs, ...lib.summary(bs) };
               };
-              // Work price cost (energy dashboard) plus, except for a day, the
-              // base price. The running hour is priced at the current work
-              // price; recorded hours keep the price of their time.
-              s.cost = (r, now, liveKwh) => {
-                const price = s.price();
-                const live = r.end > now && price !== null ? liveKwh * price : 0;
-                return { price, work: s.series(s.cfg.cost, r, now, live),
-                  base: r.period === 'day' ? null : s.series(s.cfg.base, r, now, 0) };
-              };
+              // Work price cost as recorded by the energy dashboard plus, except
+              // for a day, the base price. Both come from Home Assistant's own
+              // values, so every hour keeps the price of its time, also when the
+              // price changes within an hour.
+              s.cost = (r, now) => ({ price: s.price(), work: s.series(s.cfg.cost, r, now),
+                base: r.period === 'day' ? null : s.series(s.cfg.base, r, now) });
               s.tariffs = () => {
                 const st = (id) => s.hass.states[id]?.state;
                 const list = [];
@@ -550,7 +591,7 @@ button_card_templates:
       cost: |
         [[[
           const s = variables.store; const t = variables.t;
-          return t.bars ? s.cost(s.lib.range('day', 0, Date.now()), Date.now(), t.live) : null;
+          return t.bars ? s.cost(s.lib.range('day', 0, Date.now()), Date.now()) : null;
         ]]]
     styles:
       card:
@@ -730,7 +771,7 @@ button_card_templates:
       javascript: |
         [[[
           const s = window.wdEnergy;
-          if (s && variables.enabled) s.setView({ ...s.view, offset: s.view.offset + variables.step });
+          if (s && variables.enabled) s.setView({ period: s.view.period, offset: s.view.offset + variables.step });
         ]]]
     styles:
       card:
@@ -797,7 +838,7 @@ button_card_templates:
           // Costs from the recorded statistics: the work price of each hour,
           // and from a week on the base price as well. A day shows only the
           // work price.
-          const k = s.cost(d.range, Date.now(), d.live);
+          const k = s.cost(d.range, Date.now());
           const date = (t) => new Date(t).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
           let costs = '';
           const sub = (text) => `<span style="font-size:12px;line-height:16px;color:var(--wd-muted);text-align:right;
@@ -849,8 +890,44 @@ button_card_templates:
             : d.range.stat === 'day' ? new Date(b.start).toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric' })
               : new Date(b.start).toLocaleDateString('de-DE', { month: 'long' }));
           const unit = { hour: 'Höchste Stunde', day: 'Höchster Tag', month: 'Höchster Monat' }[d.range.stat];
+          // Tooltip of the selected bar: its time, energy and cost (work
+          // price, plus the base price for days and months).
+          const s = variables.store; const f = lib.fmt;
+          const sel = s.view.sel;
+          const b = Number.isInteger(sel) ? d.bars[sel] : null;
+          let tip = '';
+          if (b && b.status !== 'future') {
+            const start = new Date(b.start); const end = new Date(b.end);
+            let head;
+            if (d.range.stat === 'hour') {
+              const h0 = start.getHours(); const h1 = end.getHours() || 24;
+              const day = start.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric' });
+              head = h0 === h1 ? `${day} · ${h0} Uhr (Zeitumstellung)` : `${day} · ${h0}–${h1} Uhr`;
+            } else if (d.range.stat === 'day') {
+              head = start.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric', year: 'numeric' });
+            } else {
+              head = start.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+            }
+            let value;
+            if (b.status === 'none') value = 'vor Beginn der Aufzeichnung';
+            else if (b.status === 'gap') value = 'keine Daten';
+            else {
+              const notes = [b.status === 'current' ? 'läuft noch' : '', b.partial ? 'unvollständig' : ''].filter(Boolean);
+              value = `<b>${f.kwh(b.value)}</b>${notes.length ? ` · ${notes.join(' · ')}` : ''}`;
+            }
+            const k = s.cost(d.range, Date.now());
+            const work = k.work?.bars?.[sel]?.value;
+            const base = k.base?.bars?.[sel]?.value;
+            let cost = '';
+            if (work != null && Number.isFinite(work)) {
+              cost = base != null && Number.isFinite(base)
+                ? `≈ ${f.euro(work + base)} · Arbeit ${f.euro(work)} + Grund ${f.euro(base)}`
+                : `≈ ${f.euro(work)} Arbeitspreis`;
+            }
+            tip = `<div style="opacity:0.8">${head}</div><div>${value}</div>${cost ? `<div style="opacity:0.8">${cost}</div>` : ''}`;
+          }
           return `<div style="display:flex;flex-direction:column;gap:8px">
-            ${lib.chart(d.bars, lib.axis(d.range, d.bars), 120)}
+            ${lib.chart(d.bars, lib.axis(d.range, d.bars), 120, { pick: true, sel, tip })}
             <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:16px;color:var(--wd-muted)">
               <span style="text-align:left">${unit}: ${lib.fmt.kwh(max?.value)} · ${max ? when(max) : ''}</span>
               ${d.bars.some((b) => b.status === 'current') ? '<span style="text-align:right">hell = läuft noch</span>' : ''}</div></div>`;

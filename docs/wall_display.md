@@ -50,7 +50,12 @@ Sunday), Monat and Jahr, with arrows to page back; never into the future or
 before the first statistic. It shows the total, the cost, the change against
 the same part of the previous period, the bars, the lowest hourly mean of
 the last 24 hours, the highest measured power in the period and a year
-projection from seven complete days on. `side` lists the plugs of the energy
+projection from seven complete days on. A tap on a bar (a hover with a mouse)
+shows a tooltip as in the energy dashboard: the hour, day or month, its
+energy and its cost (work price; days and months add the base price); a tap
+on the tooltip closes it. The bars use pointer events, not `click`:
+button-card's action handler cancels `touchend`, so on a touch screen a tap
+never becomes a click. `side` lists the plugs of the energy
 dashboard with their share of the grid import and "Nicht einzeln erfasst",
 then the tariff slots (supplier · product, valid from, prices, active,
 planned or past) and the grid operator.

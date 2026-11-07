@@ -491,3 +491,87 @@ def test_store_survives_renders_and_reinstalls_on_new_code():
     )
 
     assert run(expression, body=body) == [True, True, "month", -1, "function", True]
+
+
+def test_chart_bars_are_tap_targets_with_a_tooltip():
+    now = ms(2026, 11, 20, 11, 30)
+    start = ms(2026, 11, 18, 0)
+    expression = (
+        "(() => { const t = lib.today(rows, null, now, ds);"
+        " const plain = lib.chart(t.bars, [], 120);"
+        " const picked = lib.chart(t.bars, [], 120, {pick: true, sel: 3, tip: 'TIP'});"
+         " return [plain.includes('onpointer'), (picked.match(/onpointerup=\"window.wdEnergy &amp;&amp; window.wdEnergy.pick\\(\\d+\\)\"/g) || []).length,"
+        " picked.includes('>TIP</div>'), picked.includes('left:14.58%;transform:translateX(-14.58%)'),"
+         " picked.includes('onpointerleave=\"event.pointerType === \\'mouse\\''), (picked.match(/opacity:0.45\\b/g) || []).length,"
+        " picked.includes('opacity:0.2025')]; })()"
+    )
+
+    plain_has_handlers, targets, tip, placed, leave, dimmed, running = run(
+        expression, rows=hour_rows(start, 59), now=now, ds=start
+    )
+
+    assert not plain_has_handlers
+    assert targets == 12  # 11 closed hours and the running one; no future hours
+    assert tip and placed and leave
+    assert dimmed == 10  # the other ten closed hours
+    assert running  # the running hour: light (0.45) and dimmed (0.45)
+
+
+def test_pick_redraws_only_on_change_and_a_new_period_clears_it():
+    data = yaml.safe_load(ROOM.read_text(encoding="utf-8"))
+    body = data["button_card_templates"]["wd_energy_base"]["variables"]["store"]["value"].strip()[3:-3]
+    expression = (
+        "(() => { globalThis.window = {}; const f = new Function('states', 'hass', 'variables', body);"
+        " const s = f.call(null, {}, {states: {}, connection: null}, {tariff_slots: 3});"
+        " let n = 0; s.refresh = () => { n += 1; };"
+        " s.pick(4); s.pick(4); const a = s.view.sel; s.pick(null); const b = s.view.sel;"
+        " s.pick(2); s.setView({period: 'week', offset: 0, sel: 2}); return [a, b, n, s.view.sel ?? null]; })()"
+    )
+
+    assert run(expression, body=body) == [4, None, 4, None]
+
+
+def run_async(expression, **inputs):
+    """Like run(), for an expression that yields a Promise."""
+    script = (
+        LIB
+        + "const input = JSON.parse(process.argv[1]);\n"
+        + "const { " + ", ".join(inputs) + " } = input;\n"
+        + f"Promise.resolve({expression}).then((v) => process.stdout.write(JSON.stringify(v)));\n"
+    )
+    out = subprocess.run(
+        [NODE, "-e", script, json.dumps(inputs)], capture_output=True, text=True,
+        env=dict(os.environ, TZ="Europe/Berlin"), check=True,
+    )
+    return json.loads(out.stdout)
+
+
+def test_running_cost_uses_the_entity_state_after_the_last_hour():
+    data = yaml.safe_load(ROOM.read_text(encoding="utf-8"))
+    body = data["button_card_templates"]["wd_energy_base"]["variables"]["store"]["value"].strip()[3:-3]
+    first = ms(2026, 11, 7, 13)
+    # The cost statistic starts at 13:00 with 0 €; HA priced 13:34–14:15 at
+    # 14:15, so the entity already holds 0.237 € in the running hour.
+    rows = [{"start": first, "end": first + HOUR, "change": 0.0, "state": 0.0, "sum": 0.0}]
+    expression = (
+        "(async () => { globalThis.window = {};"
+        " Date.now = () => now;"
+        " const callWS = async (msg) => ({ [msg.statistic_ids[0]]: rows });"
+        " const hass = {states: {'sensor.cost': {state: '0.237'}, 'sensor.price': {state: '0.3'}},"
+        " connection: {}, callWS};"
+        " const vars = {energy_entity: 'sensor.e', power_entity: 'sensor.p', price_entity: 'sensor.price',"
+        " cost_entity: 'sensor.cost', base_entity: 'sensor.base', tariff_slots: 3};"
+        " const f = new Function('states', 'hass', 'variables', body);"
+        " let s = f.call(null, {}, hass, vars);"
+        " for (let i = 0; i < 5; i += 1) { s.cost(lib.range('day', 0, now), now); await new Promise((r) => setTimeout(r, 0)); }"
+        " const k = s.cost(lib.range('day', 0, now), now);"
+        " return [k.price, k.work.partial, +k.work.total.toFixed(3), k.work.bars[14].status, k.base]; })()"
+    )
+
+    price, partial, total, status, base = run_async(expression, body=body, rows=rows, now=ms(2026, 11, 7, 14, 25))
+
+    assert price == pytest.approx(0.3)
+    assert partial  # costs start within the day
+    assert total == pytest.approx(0.237)
+    assert status == "current"
+    assert base is None  # a day shows the work price only
