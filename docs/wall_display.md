@@ -39,7 +39,43 @@ The living room, from top to bottom:
 | Fernsehen | The TV with its power (switch "Fernsehen", see `docs/tv_power.md`): "Aus · ohne Strom", "Standby", "Startet", "Fährt hoch" (the TV reports on without a picture after a cold start), "An" with the app and the power draw, "Schaltet aus"; the app shows only with a name from the Android TV Remote options, or "Startseite" for the launcher, never as a package id. A tap switches it on or off, a long press opens the media player |
 | Musik | Active Bluesound player, play controls, volume, room chips to join or leave the group |
 | Raumklima | Temperature, humidity and window state per room, with the time a window was opened |
+| Strom | Grid import today in kWh, its work price cost, hourly bars and the change against yesterday until the same full hour; the current power in the heading (amber from 3 kW). A tap opens the subview `strom` |
 | Geräte | Washing machine and dryer, while one of them runs or draws more than 5 W |
+
+### Subview "Strom"
+
+`/dashboard-living-room-wall-display/strom`, with its own back button
+because kiosk mode hides the header. Periods Tag, Woche (ISO, Monday to
+Sunday), Monat and Jahr, with arrows to page back; never into the future or
+before the first statistic. It shows the total, the cost, the change against
+the same part of the previous period, the bars, the lowest hourly mean of
+the last 24 hours, the highest measured power in the period and a year
+projection from seven complete days on. `side` lists the plugs of the energy
+dashboard with their share of the grid import and "Nicht einzeln erfasst",
+then the tariff slots.
+
+The data rules:
+
+- Everything comes from recorder statistics over the websocket
+  (`recorder/statistics_during_period`, `energy/get_prefs`); the display
+  user needs no admin rights for these.
+- Today = the hourly `change` values since midnight plus the meter reading
+  minus the last recorded hour. A missing hour is a gap (dashed), never 0;
+  time before the first statistic is a flat track. A period that starts
+  before the first statistic is marked "unvollständig erfasst"; comparisons
+  and shares need complete periods.
+- Costs come from the recorded cost statistics (docs/smart_meter.md,
+  Tariff), so every hour keeps the price of its time. The day shows the work
+  price only; week, month and year add the base price. The running hour is
+  priced at the current work price.
+- Shares cover the recorded hours (no live part, which the plugs do not
+  have). A plug inside another listed plug (`included_in_stat`) is not
+  counted twice; plugs above the meter show "Messabweichung".
+
+The templates `wd_energy_*` live in the living room file, so the bedroom
+dashboard does not change. `tests/wall_display/test_energy_logic.py` runs
+the pure functions (marked `energy-lib`) in Node with the display's time
+zone, including the 23 and 25 hour days.
 
 The bedroom has the same header, weather, music, climate and appliance
 sections. In between:
@@ -140,6 +176,9 @@ profile to "Schlafzimmer".
   sunrise alarm and the Workday integration, see
   `docs/bedroom_sunrise_alarm.md`.
 - Weather from the Deutscher Wetterdienst, see Weather sources.
+- For the Strom section: the smart meter with the energy dashboard, the
+  tariff helpers and the price entity in the energy settings, see
+  `docs/smart_meter.md`. Without a tariff the cost reads "Tarif fehlt".
 - The two font files in `/config/www/fonts/` (see Fonts).
 
 ## Weather sources
