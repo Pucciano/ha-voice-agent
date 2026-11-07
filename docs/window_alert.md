@@ -114,3 +114,15 @@ When the thermostats are in Home Assistant, each room in `rooms` gets its
 of its contacts has been open for a short time, and restores the previous
 mode when all of the room's contacts are closed. The announcement can stay
 as a reminder for rooms without a thermostat.
+
+## Live verification on 2026-11-07
+
+- Bathroom window opened at 15:20:12. The automation triggered at
+  15:25:12; all three conditions held (19.8 °C inside, 7.6 °C outside per
+  DWD, two people at home). The living room satellite said "Im Bad ist das
+  Fenster seit 5 Minuten offen. Draußen sind es 8 Grad, drinnen 20. Denk an
+  die Heizung." and it was heard.
+- The window was closed before the leaving test, so the leaving automation
+  itself was not run. Its notify action was checked by sending the same
+  title and message format to one iPhone by hand; who counts as the last
+  person and the list of open contacts are covered by the template tests.
