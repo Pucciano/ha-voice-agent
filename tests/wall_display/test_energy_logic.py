@@ -575,3 +575,11 @@ def test_running_cost_uses_the_entity_state_after_the_last_hour():
     assert total == pytest.approx(0.237)
     assert status == "current"
     assert base is None  # a day shows the work price only
+
+
+def test_cost_start_label_only_when_costs_start_later():
+    first = ms(2026, 11, 7, 0)
+
+    assert run("lib.lateStart(a, b)", a=first, b=first) is False
+    assert run("lib.lateStart(a, b)", a=first + 13 * HOUR, b=first) is True
+    assert run("lib.lateStart(null, b)", b=first) is False

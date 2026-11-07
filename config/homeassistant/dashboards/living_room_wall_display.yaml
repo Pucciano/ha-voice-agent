@@ -361,6 +361,10 @@ button_card_templates:
                   status: i === active ? 'active' : x.start > today ? 'planned' : 'past' }));
               };
 
+              // A cost statistic that starts later than the energy data (both
+              // as the start of their first hourly row) covers only part of it.
+              const lateStart = (cost, energy) => cost != null && energy != null && cost > energy;
+
               // A text helper's state; an empty input_text reports "unknown".
               const text = (v) => {
                 const t = String(v ?? '').trim();
@@ -368,7 +372,7 @@ button_card_templates:
               };
 
               return { HOUR, startOfDay, addDays, addMonths, nextHour, range, slots, bars, summary, compare, today,
-                peak, lowestMean, projection, deviceName, consumers, tariffs, text, fmt, isoWeek, title, axis, chart };
+                peak, lowestMean, projection, deviceName, consumers, tariffs, text, lateStart, fmt, isoWeek, title, axis, chart };
             })();
             // energy-lib:end
             // The manager's methods. A page keeps window.wdEnergy across a
@@ -645,7 +649,9 @@ button_card_templates:
             ${value ? `<span style="font-size:15px;line-height:19px;font-weight:700;font-variant-numeric:tabular-nums">${value}</span>` : ''}
             <span style="font-size:12px;line-height:16px;color:var(--wd-muted)">${sub}</span></div>`;
           if (!c.work?.hasData) return c.price === null ? box('', 'Tarif fehlt') : '';
-          const from = c.work.partial ? `ab ${new Date(c.work.start).getHours()} Uhr` : 'Arbeitspreis';
+          // "ab" only when the costs start after the energy data.
+          const late = variables.store.lib.lateStart(c.work.start, variables.t.dataStart);
+          const from = late ? `ab ${new Date(c.work.start).getHours()} Uhr` : 'Arbeitspreis';
           return box(`≈ ${f.euro(c.work.total)}`, from);
         ]]]
       bars: |
@@ -846,10 +852,12 @@ button_card_templates:
           if (k.work?.hasData) {
             const base = k.base?.hasData ? k.base.total : null;
             const lines = [];
-            if (d.range.period === 'day') lines.push(k.work.partial ? `Arbeitspreis ab ${new Date(k.work.start).getHours()} Uhr` : 'Arbeitspreis');
+            // "ab" only when a cost starts after the energy data in this period.
+            const late = (x) => x?.partial && s.lib.lateStart(x.start, d.dataStart);
+            if (d.range.period === 'day') lines.push(late(k.work) ? `Arbeitspreis ab ${new Date(k.work.start).getHours()} Uhr` : 'Arbeitspreis');
             else {
-              lines.push(`Arbeitspreis ${f.euro(k.work.total)}${k.work.partial ? ` ab ${date(k.work.start)}` : ''}`);
-              lines.push(base === null ? 'ohne Grundpreis' : `Grundpreis ${f.euro(base)}${k.base.partial ? ` ab ${date(k.base.start)}` : ''}`);
+              lines.push(`Arbeitspreis ${f.euro(k.work.total)}${late(k.work) ? ` ab ${date(k.work.start)}` : ''}`);
+              lines.push(base === null ? 'ohne Grundpreis' : `Grundpreis ${f.euro(base)}${late(k.base) ? ` ab ${date(k.base.start)}` : ''}`);
             }
             costs = `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;padding-top:8px">
               <span style="font-size:15px;line-height:19px;font-weight:700;font-variant-numeric:tabular-nums">≈ ${f.euro(k.work.total + (base ?? 0))}</span>
