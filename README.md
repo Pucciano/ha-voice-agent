@@ -277,6 +277,9 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/bedroom_sunrise_alarm.md` covers the sunrise alarm on the bedroom's
   WLED bed light: behaviour, helpers, scene, script, automation and the WLED
   reset preset.
+- `docs/window_alert.md` covers the window alert: the announcement on the
+  satellites when a window is open while it is colder outside, and the push
+  notification when the last person leaves.
 
 ## Makefile helpers
 
