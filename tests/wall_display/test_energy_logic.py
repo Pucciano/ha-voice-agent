@@ -401,6 +401,35 @@ def test_tariff_status_matches_the_helper_rule():
     assert [(x["start"], x["status"]) for x in after] == [("2026-11-01", "past"), ("2027-01-01", "active")]
 
 
+def test_tariff_card_shows_names_and_grid_operator():
+    data = yaml.safe_load(ROOM.read_text(encoding="utf-8"))
+    body = data["button_card_templates"]["wd_energy_tariffs"]["custom_fields"]["list"].strip()[3:-3]
+    slots = [
+        {"slot": 1, "start": "2026-11-01", "work": 30, "base": 12.5, "provider": "Stadtwerke", "product": "Basis"},
+        {"slot": 2, "start": "2027-01-01", "work": 31, "base": 0, "provider": "<b>X</b>", "product": ""},
+        {"slot": 3, "start": "2026-01-01", "work": 0, "base": 0, "provider": "", "product": ""},
+    ]
+    expression = (
+        "new Function('states', 'variables', body)("
+        "{'input_text.electricity_grid_operator': {state: 'Netz GmbH'}},"
+        " {store: {lib, tariffs: () => lib.tariffs(slots, '2026-12-01')}})"
+    )
+
+    html = run(expression, body=body, slots=slots)
+
+    assert "Stadtwerke · Basis" in html and "aktiv" in html
+    assert "&#60;b&#62;X&#60;/b&#62;" in html and "<b>X" not in html
+    assert "geplant" in html and "Grundpreis fehlt" in html
+    assert "Netz GmbH" in html
+    assert html.count("ct/kWh") == 2  # the unused slot is hidden
+
+
+def test_empty_text_helpers_read_as_empty():
+    assert run("['unknown', 'unavailable', '  ', null, ' Netz GmbH '].map(lib.text)") == [
+        "", "", "", "", "Netz GmbH"
+    ]
+
+
 def test_every_energy_template_compiles():
     data = yaml.safe_load(ROOM.read_text(encoding="utf-8"))
     bodies = []
@@ -444,3 +473,21 @@ def test_device_names():
     )
 
     assert names == ["Fernseher", "Highboard", "Rack USV", "Gerät 4"]
+
+
+def test_store_survives_renders_and_reinstalls_on_new_code():
+    data = yaml.safe_load(ROOM.read_text(encoding="utf-8"))
+    body = data["button_card_templates"]["wd_energy_base"]["variables"]["store"]["value"].strip()[3:-3]
+    expression = (
+        "(() => { globalThis.window = {};"
+        " const f = new Function('states', 'hass', 'variables', body);"
+        " const vars = {energy_entity: 'e', power_entity: 'p', price_entity: 'x', cost_entity: 'c',"
+        " base_entity: 'b', tariff_slots: 3};"
+        " const hass = {states: {}, connection: null};"
+        " const a = f.call(null, {}, hass, vars); const b = f.call(null, {}, hass, vars);"
+        " a.setView({period: 'month', offset: -1}); window.wdEnergy.version = 'old';"
+        " const c = f.call(null, {}, hass, vars);"
+        " return [a === b, c !== a, c.view.period, c.view.offset, typeof c.tariffs, c.today(Date.now()).loading === true]; })()"
+    )
+
+    assert run(expression, body=body) == [True, True, "month", -1, "function", True]

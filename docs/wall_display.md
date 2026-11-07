@@ -52,7 +52,8 @@ the same part of the previous period, the bars, the lowest hourly mean of
 the last 24 hours, the highest measured power in the period and a year
 projection from seven complete days on. `side` lists the plugs of the energy
 dashboard with their share of the grid import and "Nicht einzeln erfasst",
-then the tariff slots.
+then the tariff slots (supplier · product, valid from, prices, active,
+planned or past) and the grid operator.
 
 The data rules:
 
@@ -71,6 +72,10 @@ The data rules:
 - Shares cover the recorded hours (no live part, which the plugs do not
   have). A plug inside another listed plug (`included_in_stat`) is not
   counted twice; plugs above the meter show "Messabweichung".
+
+A page keeps the data manager (`window.wdEnergy`) across a dashboard save;
+it installs itself again whenever its code changes, so a deploy takes
+effect without reloading the display.
 
 The templates `wd_energy_*` live in the living room file, so the bedroom
 dashboard does not change. `tests/wall_display/test_energy_logic.py` runs

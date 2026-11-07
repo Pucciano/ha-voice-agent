@@ -338,16 +338,20 @@ button_card_templates:
                   status: i === active ? 'active' : x.start > today ? 'planned' : 'past' }));
               };
 
+              // A text helper's state; an empty input_text reports "unknown".
+              const text = (v) => {
+                const t = String(v ?? '').trim();
+                return ['unknown', 'unavailable'].includes(t) ? '' : t;
+              };
+
               return { HOUR, startOfDay, addDays, addMonths, nextHour, range, slots, bars, summary, compare, today,
-                peak, lowestMean, projection, deviceName, consumers, tariffs, fmt, isoWeek, title, axis, chart };
+                peak, lowestMean, projection, deviceName, consumers, tariffs, text, fmt, isoWeek, title, axis, chart };
             })();
             // energy-lib:end
-            const VERSION = 2;
-            let s = window.wdEnergy;
-            if (!s || s.version !== VERSION) {
-              s = { version: VERSION, lib, cache: new Map(), inflight: new Map(), cards: new Set(),
-                view: { period: 'day', offset: 0 } };
-              window.wdEnergy = s;
+            // The manager's methods. A page keeps window.wdEnergy across a
+            // dashboard save, so the manager is installed again whenever this
+            // code changes (`version` is the code itself), keeping the view.
+            const install = (s) => {
               const HOUR = lib.HOUR;
               s.refresh = () => {
                 s.cards.forEach((c) => {
@@ -430,7 +434,9 @@ button_card_templates:
                 for (let i = 1; i <= s.cfg.slots; i += 1) {
                   list.push({ slot: i, start: st(`input_datetime.electricity_tariff_${i}_valid_from`),
                     work: parseFloat(st(`input_number.electricity_tariff_${i}_work_price`)) || 0,
-                    base: parseFloat(st(`input_number.electricity_tariff_${i}_base_price`)) || 0 });
+                    base: parseFloat(st(`input_number.electricity_tariff_${i}_base_price`)) || 0,
+                    provider: lib.text(st(`input_text.electricity_tariff_${i}_provider`)),
+                    product: lib.text(st(`input_text.electricity_tariff_${i}_product`)) });
                 }
                 const d = new Date();
                 const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -488,6 +494,14 @@ button_card_templates:
                 if (!d.rows) return d;
                 return lib.consumers(list, d.rows, data.bars);
               };
+            };
+            const version = Object.values(lib).map(String).join('') + String(install);
+            let s = window.wdEnergy;
+            if (!s || s.version !== version) {
+              s = { version, lib, cache: new Map(), inflight: new Map(), cards: s?.cards || new Set(),
+                view: s?.view || { period: 'day', offset: 0 } };
+              install(s);
+              window.wdEnergy = s;
             }
             s.hass = hass;
             s.cfg = { energy: variables.energy_entity, power: variables.power_entity, price: variables.price_entity,
@@ -909,8 +923,9 @@ button_card_templates:
             <div style="font-size:11px;line-height:14px;color:var(--wd-muted);text-align:left">${note}</div></div>`;
         ]]]
 
-  # Tariff slots from the helpers, read only: valid from, work price, base
-  # price and whether a slot is active, planned or past. They are edited
+  # Tariff slots from the helpers, read only: supplier and product, valid
+  # from, work price, base price and whether a slot is active, planned or
+  # past; below them the grid operator. They are edited
   # under Settings → Devices & services → Helpers ("Stromtarif").
   wd_energy_tariffs:
     template: wd_energy_base
@@ -934,12 +949,20 @@ button_card_templates:
         [[[
           const s = variables.store; const f = s.lib.fmt;
           const list = s.tariffs();
+          // Names come from text helpers: escape them before they go into HTML.
+          const esc = (t) => String(t).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
           const muted = 'font-size:11px;line-height:14px;color:var(--wd-muted);text-align:left';
-          const where = `<div style="${muted}">Ändern unter Einstellungen → Geräte &amp; Dienste → Helfer „Stromtarif“.
-            Bereits erfasste Stunden behalten ihren Preis.</div>`;
+          const op = s.lib.text(states['input_text.electricity_grid_operator']?.state);
+          const operator = `<div style="font-size:12px;line-height:16px;text-align:left">
+            <span style="color:var(--wd-muted)">Netzbetreiber</span>
+            ${op ? `<span style="font-weight:700">${esc(op)}</span>`
+              : '<span style="color:var(--wd-warn-ink)">nicht eingetragen</span>'}</div>`;
+          const where = `<div style="${muted}">Ändern unter Einstellungen → Geräte &amp; Dienste → Helfer „Stromtarif“ und
+            „Netzbetreiber“. Bereits erfasste Stunden behalten ihren Preis.</div>`;
           if (!list.length) {
             return `<div style="display:flex;flex-direction:column;gap:8px">
-              <div style="font-size:13px;line-height:17px;font-weight:700;color:var(--wd-warn-ink);text-align:left">Kein Tarif eingetragen</div>${where}</div>`;
+              <div style="font-size:13px;line-height:17px;font-weight:700;color:var(--wd-warn-ink);text-align:left">Kein Tarif eingetragen</div>
+              ${operator}${where}</div>`;
           }
           const ct = (v) => `${v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ct/kWh`;
           const day = (iso) => iso.split('-').reverse().join('.');
@@ -947,15 +970,16 @@ button_card_templates:
             past: ['abgelaufen', 'transparent', 'var(--wd-muted)'] };
           const rows = list.map((x) => {
             const [label, bg, ink] = tag[x.status];
+            const name = [x.provider, x.product].filter(Boolean).map(esc).join(' · ') || `Tarif ${x.slot}`;
             const base = x.base > 0 ? `${f.euro(x.base)}/Monat` : '<span style="color:var(--wd-warn-ink)">Grundpreis fehlt</span>';
             return `<div style="display:flex;align-items:center;gap:10px;opacity:${x.status === 'past' ? 0.6 : 1}">
               <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;text-align:left">
-                <span style="font-size:13px;line-height:17px;font-weight:700">ab ${day(x.start)}</span>
-                <span style="font-size:12px;line-height:16px;color:var(--wd-muted);font-variant-numeric:tabular-nums">${ct(x.work)} · ${base}</span></div>
+                <span style="font-size:13px;line-height:17px;font-weight:700">${name}</span>
+                <span style="font-size:12px;line-height:16px;color:var(--wd-muted);font-variant-numeric:tabular-nums">ab ${day(x.start)} · ${ct(x.work)} · ${base}</span></div>
               <span style="height:24px;padding:0 10px;border-radius:12px;display:flex;align-items:center;font-size:11px;
                 font-weight:700;background:${bg};color:${ink};border:1px solid ${x.status === 'past' ? 'var(--wd-line-strong)' : 'transparent'}">${label}</span></div>`;
           });
-          return `<div style="display:flex;flex-direction:column;gap:12px">${rows.join('')}${where}</div>`;
+          return `<div style="display:flex;flex-direction:column;gap:12px">${rows.join('')}${operator}${where}</div>`;
         ]]]
 
 views:
