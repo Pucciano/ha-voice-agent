@@ -146,6 +146,24 @@ it; that is expected.
 - **Integration:** Tasmota (discovery prefix `tasmota/discovery`). It
   creates the device "bitShake SmartMeterReader" with
   `sensor.bitshake_smartmeterreader_ehz_*`.
+- **Names:** the device is called "Stromzähler" (`name_by_user`, area
+  Zählerschrank) and each entity has a short German name, so the display
+  names read "Stromzähler Bezug", "Stromzähler Leistung L1" and so on. The
+  entity ids keep the integration's English ids, which the energy
+  dashboard, its statistics and the automation use.
+
+  | Entity id suffix | Name |
+  |---|---|
+  | `ehz_importactive` | Bezug |
+  | `ehz_exportactive` | Einspeisung |
+  | `ehz_power` | Leistung |
+  | `ehz_power_l1` … `_l3` | Leistung L1 … L3 |
+  | `ehz_voltage_l1` … `_l3` | Spannung L1 … L3 |
+  | `ehz_current_l1` … `_l3` | Strom L1 … L3 |
+  | `ehz_frequency` | Netzfrequenz |
+  | diagnostics | Letzter Neustart, WLAN-Verbindungen, MQTT-Verbindungen, Neustartgrund, WLAN, IP-Adresse, WLAN-Qualität, WLAN-Signal, Firmware |
+
+  None of them is exposed to Assist.
 - **Energy dashboard:** grid consumption
   `sensor.bitshake_smartmeterreader_ehz_importactive`, return to grid
   `sensor.bitshake_smartmeterreader_ehz_exportactive`, grid power
