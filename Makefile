@@ -1,8 +1,9 @@
 .PHONY: dev-up dev-up-debug dev-down prod-up prod-down lint format test eval \
 	stt-capture-test wake-word-recorder-test aec-tuning-test \
-	llm-proxy-test stt-bridge-test \
+	llm-proxy-test stt-bridge-test ble-proxy-test \
 	wall-display-check wall-display-diff wall-display-deploy wall-display-test \
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
+	sat-levels \
 	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-pull \
 	ww-import ww-features ww-train ww-evaluate
 
@@ -29,6 +30,10 @@ WALL_DISPLAY := uv run --no-project --python 3.12 --with pyyaml==6.0.3 \
 	--with websockets==16.0 python scripts/wall_display_deploy.py
 WALL_DISPLAY_HA = $(if $(wildcard $(HA_ENV)),--env-file $(HA_ENV)) $(if $(YES),--yes)
 
+# Microphone level history of a satellite, see docs/microphone_levels.md.
+SAT_LEVELS := uv run --no-project --python 3.12 --with websockets==16.0 \
+	python scripts/satellite_levels.py
+
 dev-up:
 	docker compose -f compose/dev/docker-compose.yml up -d
 
@@ -45,13 +50,13 @@ prod-down:
 	docker compose -f compose/prod/docker-compose.yml down
 
 lint:
-	pylint --rcfile=.pylintrc services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts/*.py
+	pylint --rcfile=.pylintrc services/ble_proxy/app services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts/*.py
 
 format:
-	black --line-length 80 services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app tests/llm_proxy tests/stt_bridge tests/stt_capture tests/wake_word_recorder tests/wall_display training/eval training/llm training/stt training/wake_word scripts/*.py
+	black --line-length 80 services/ble_proxy/app services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app tests/ble_proxy tests/llm_proxy tests/stt_bridge tests/stt_capture tests/wake_word_recorder tests/wall_display training/eval training/llm training/stt training/wake_word scripts/*.py
 
 test:
-	python -m compileall -q -x '/\.venv/' services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts
+	python -m compileall -q -x '/\.venv/' services/ble_proxy/app services/llm_proxy/app services/stt_bridge/app services/stt_capture/app services/wake_word_recorder/app training/eval training/llm training/stt training/wake_word scripts
 
 # Request capture relay (services/stt_capture); standard library only, so
 # pytest is the only extra.
@@ -72,6 +77,11 @@ llm-proxy-test:
 # API and a fake Home Assistant websocket.
 stt-bridge-test:
 	uvx --python 3.12 --with-requirements services/stt_bridge/requirements.txt --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/stt_bridge
+
+# Bluetooth proxy (services/ble_proxy) against a fake adapter, through the
+# aioesphomeapi client Home Assistant uses; with the service's own pins.
+ble-proxy-test:
+	uvx --python 3.12 --with-requirements services/ble_proxy/requirements.txt --from pytest==8.3.5 pytest -q -p no:cacheprovider tests/ble_proxy
 
 # Echo canceller self test engine (esphome/components/aec_tuning) against a
 # simulated room; needs a host C++ compiler.
@@ -95,6 +105,12 @@ wall-display-test:
 
 eval:
 	python training/eval/eval_tool_call_validity.py --dataset dev/datasets/llm
+
+# Microphone levels of a satellite from Home Assistant (docs/microphone_levels.md).
+# DAYS=<n> changes the window, AROUND=<timestamp> adds five minute levels.
+sat-levels:
+	$(SAT_LEVELS) $(if $(DAYS),--days $(DAYS)) $(if $(AROUND),--around $(AROUND)) \
+		$(if $(wildcard $(HA_ENV)),--env-file $(HA_ENV))
 
 sat-config:
 	$(ESPHOME) config $(SAT_CONFIG)

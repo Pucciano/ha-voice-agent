@@ -8,6 +8,12 @@ Layout, the same as dev/datasets/wake_word/recordings/ on the Mac, so
                                                               /<stem>.json
     <capture dir>/aivi-wake-word/recordings/negative/<stem>.wav
                                                     /<stem>.json
+    <capture dir>/aivi-wake-word/recordings/wake/<stem>.wav
+                                                /<stem>.json
+
+recordings/wake/ holds the short clips around a wake word detection
+(kind "wake"): the pre-roll from before the detection plus the audio after
+it, with the detection's offset in the sidecar.
 
 <stem> is sat_<satellite>_<YYYYmmdd-HHMMSS> in local time, the scheme of the
 Mac recorder, so entries in accepted.txt and excluded.txt stay valid. While a
@@ -222,8 +228,8 @@ class Store:
         return None
 
     def directory(self, kind: str, speaker: str | None) -> pathlib.Path:
-        if kind == "negative":
-            return self.recordings / "negative"
+        if kind in ("negative", "wake"):
+            return self.recordings / kind
         if kind != "positive" or not speaker:
             raise ValueError("a positive take needs a speaker")
         return self.recordings / "positive" / speaker

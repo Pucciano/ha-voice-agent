@@ -17,6 +17,7 @@ bridge to a cloud speech recogniser:
 | Speech-to-Phrase | speech to text | internal |
 | Piper (`de_DE-thorsten-medium`) | text to speech | 10200 |
 | Whisper (`base-int8`, on demand) | speech to text, comparison only | 10301 |
+| ble-proxy (own compose project) | Bluetooth for Home Assistant through a USB dongle ([section 13](#13-bluetooth-proxy)) | 6053 |
 
 The steps were verified on `aivi-jetson` on 2026-09-27. In the commands,
 replace `<jetson-ip>` with the Nano's `eth0` address (`ip -4 addr show eth0`)
@@ -240,6 +241,12 @@ missing, and the rule `[schalte ][ das]licht[er]` produces the joined word
 `compose/jetson/custom_sentences/de/lights.yaml` adds the everyday forms for
 areas and floors. It is mounted read-only and read at every training.
 
+Sentence triggers of Home Assistant automations need no file here:
+speech-to-phrase reads them from Home Assistant at every training
+(`conversation/sentences/list`, seen in its `hass_api.py`), like the exposed
+names. After a new or changed trigger, a restart of speech-to-phrase is
+enough.
+
 To update the sentences on a running Jetson, copy them, install them with sudo
 and recreate the container:
 
@@ -265,8 +272,12 @@ Training takes about 11 s. Requests in that time return an empty text.
 
 The `stt-capture` relay can store real voice requests as raw data for
 improving speech recognition: the audio that Speech-to-Phrase received and
-the text it recognised. Every satellite has a switch `Anfragen aufzeichnen` in
-Home Assistant. It is off after every restart of the satellite.
+the text it recognised. A request with an empty or very quiet recording is
+usually a false accept of the wake word;
+[microphone levels](microphone_levels.md) explains how to read such a
+request together with the level history. Every satellite has a switch `Anfragen aufzeichnen` in
+Home Assistant. It is on unless somebody switched it off, and a restart of
+the satellite keeps that choice.
 
 ### How it works
 
@@ -451,6 +462,11 @@ satellite then streams the signal that microWakeWord hears straight to the
 recorder on port 10800. Home Assistant stays connected, and speech
 recognition on port 10300 is not involved.
 
+The same connection carries the clips: while `Wake-Word-Mitschnitt` is on,
+the satellite sends a four second clip around every wake word detection, two
+seconds of it from before the detection. These clips are the only recording
+that holds the sound a false accept reacted to.
+
 ### How it works
 
 The satellite opens a TCP connection and sends Wyoming events: `take-start`
@@ -464,6 +480,7 @@ at the end `take-saved`; the satellite shows the result in its entity
 - the satellite id has a `--satellite` line in the compose file
 - a "Hey AIVI" take names its speaker with lower case letters and digits,
   single `_` or `-` in between
+- the kind is `positive`, `negative` or `wake` (a clip)
 - the take is at most two hours long
 - the capture drive is mounted, carries its marker file and the
   `aivi-wake-word/` directory, and has at least 1 GiB free; the space is
@@ -478,6 +495,8 @@ The audio is written while the take runs, in the layout of
   positive/<speaker>/sat_living_room_20261004-143012.json  speaker, length, end, detections
   negative/sat_living_room_20261004-150000.wav
   negative/sat_living_room_20261004-150000.json
+  wake/sat_living_room_20261101-181512.wav                 clip around a detection
+  wake/sat_living_room_20261101-181512.json                the detection's offset
 ```
 
 Both files end in `.part` while the take runs. A take that ends without
@@ -525,7 +544,7 @@ scp -r compose/jetson/docker-compose.yml scripts/jetson_capture.sh services/wake
 ```
 
 ```bash
-ssh aivi@<jetson-ip> 'docker build -t aivi/wake-word-recorder:0.1.0 /tmp/aivi-update/wake_word_recorder'
+ssh aivi@<jetson-ip> 'docker build -t aivi/wake-word-recorder:0.2.0 /tmp/aivi-update/wake_word_recorder'
 ```
 
 Update `aivi-capture` and create the `aivi-wake-word/` directory on the
@@ -539,7 +558,7 @@ The first time, try the recorder on a spare port. The token comes from the
 `.env` file without showing up in a command line:
 
 ```bash
-ssh aivi@<jetson-ip> 'export WAKE_WORD_RECORDER_TOKEN="$(sed -n "s/^WAKE_WORD_RECORDER_TOKEN=//p" /opt/aivi/compose/.env)" && docker run --rm -d --name wake-word-recorder-trial -p 10810:10800 -e WAKE_WORD_RECORDER_TOKEN -e TZ=Europe/Berlin -v /mnt/aivi-capture:/capture:rslave aivi/wake-word-recorder:0.1.0 --satellite living_room'
+ssh aivi@<jetson-ip> 'export WAKE_WORD_RECORDER_TOKEN="$(sed -n "s/^WAKE_WORD_RECORDER_TOKEN=//p" /opt/aivi/compose/.env)" && docker run --rm -d --name wake-word-recorder-trial -p 10810:10800 -e WAKE_WORD_RECORDER_TOKEN -e TZ=Europe/Berlin -v /mnt/aivi-capture:/capture:rslave aivi/wake-word-recorder:0.2.0 --satellite living_room'
 ```
 
 `scripts/wyoming_smoke_test.py take` sends a WAV file (16 kHz, 16 bit, mono,
@@ -771,6 +790,15 @@ Another transcription API takes `.env` entries too: `STT_API_URL` (default
 `https://api.mistral.ai/v1`) and `STT_MODEL` (default
 `voxtral-mini-latest`). For OpenAI or a Whisper server, add `--bias-field
 prompt` to the bridge's command in the compose file.
+
+## 13. Bluetooth proxy
+
+A Bluetooth dongle at the Jetson serves Home Assistant as an ESPHome-compatible
+Bluetooth proxy for the living room: the Vogel's TV mount and presence. It is
+a compose project of its own, `/opt/aivi/ble-proxy`, so it runs on a
+Raspberry Pi unchanged. The L4T kernel needs a patched Realtek driver for the
+dongle; `scripts/ble_proxy_host.sh` builds and installs it with a boot service
+and a crash guard. Everything else is in [Bluetooth proxy](ble_proxy.md).
 
 ## Logging
 

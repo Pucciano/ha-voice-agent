@@ -92,9 +92,23 @@ void TakeStreamer::setup() {
   }
   this->chunk_.resize(CHUNK_BYTES);
 
+  if (this->preroll_ms_ > 0) {
+    const size_t preroll_bytes = this->preroll_ms_ * BYTES_PER_MS;
+    this->preroll_buffer_ = ring_buffer::RingBuffer::create(preroll_bytes);
+    if (this->preroll_buffer_ == nullptr) {
+      // Takes still work; only clips need the pre-roll.
+      ESP_LOGE(TAG, "Could not allocate the %u byte pre-roll buffer", static_cast<unsigned>(preroll_bytes));
+      this->preroll_ms_ = 0;
+    }
+  }
+
   this->microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
-    // Runs in the microphone task: copy only, never block. After an
-    // overflow nothing more is written, so the take has no gap.
+    // Runs in the microphone task: copy only, never block.
+    if (this->preroll_filling_.load(std::memory_order_acquire)) {
+      // Keeps the newest audio, so the oldest falls out of the buffer.
+      this->preroll_buffer_->write(data.data(), data.size());
+    }
+    // After an overflow nothing more is written, so the take has no gap.
     if (!this->capturing_.load(std::memory_order_acquire) || this->overflow_.load(std::memory_order_relaxed))
       return;
     const uint32_t captured = this->captured_bytes_.load(std::memory_order_relaxed);
@@ -120,8 +134,10 @@ void TakeStreamer::dump_config() {
                 "Take Streamer:\n"
                 "  Recorder: %s:%u\n"
                 "  Satellite: %s\n"
-                "  Buffer: %" PRIu32 " ms",
-                this->host_.c_str(), this->port_, this->satellite_id_.c_str(), this->buffer_ms_);
+                "  Buffer: %" PRIu32 " ms\n"
+                "  Clip: %" PRIu32 " ms pre-roll, %" PRIu32 " ms post-roll",
+                this->host_.c_str(), this->port_, this->satellite_id_.c_str(), this->buffer_ms_, this->preroll_ms_,
+                this->postroll_ms_);
 }
 
 #ifdef USE_OTA_STATE_LISTENER
@@ -138,6 +154,7 @@ bool TakeStreamer::start_take(const std::string &kind, const std::string &speake
     ESP_LOGW(TAG, "A take is already running");
     return false;
   }
+  this->clip_ = false;
   this->kind_ = kind;
   this->speaker_.clear();
   if (kind == "positive") {
@@ -169,6 +186,10 @@ bool TakeStreamer::start_take(const std::string &kind, const std::string &speake
     return false;
   }
 
+  return this->connect_();
+}
+
+bool TakeStreamer::connect_() {
   this->socket_ = socket::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (this->socket_ == nullptr) {
     this->fail_("no_socket");
@@ -189,6 +210,89 @@ bool TakeStreamer::start_take(const std::string &kind, const std::string &speake
   this->set_state_(State::CONNECTING);
   this->enable_loop();
   this->report_("connecting");
+  return true;
+}
+
+void TakeStreamer::set_clips_enabled(bool enabled) {
+  this->clips_enabled_ = enabled;
+  // Called from a switch, which may be set up before the microphone.
+  this->defer([this]() { this->apply_preroll_(); });
+}
+
+void TakeStreamer::apply_preroll_() {
+  if (this->preroll_ms_ == 0 || this->is_failed())
+    return;
+  const bool filling = this->preroll_filling_.load(std::memory_order_acquire);
+  if (this->clips_enabled_ == filling)
+    return;
+  if (this->clips_enabled_) {
+    this->preroll_buffer_->reset();
+    this->preroll_filling_.store(true, std::memory_order_release);
+    if (!this->source_started_) {
+      this->microphone_source_->start();
+      this->source_started_ = true;
+    }
+    ESP_LOGI(TAG, "Clips on: %" PRIu32 " ms pre-roll", this->preroll_ms_);
+    return;
+  }
+  this->preroll_filling_.store(false, std::memory_order_release);
+  if (!this->capturing_.load(std::memory_order_acquire) && this->source_started_) {
+    this->microphone_source_->stop();
+    this->source_started_ = false;
+  }
+  ESP_LOGI(TAG, "Clips off");
+}
+
+uint32_t TakeStreamer::take_preroll_() {
+  // Moves whole chunks, so the clip starts at a sample boundary.
+  uint32_t moved = 0;
+  while (true) {
+    const size_t length = this->preroll_buffer_->read(this->chunk_.data(), this->chunk_.size(), 0);
+    if (length == 0)
+      break;
+    if (this->ring_buffer_->write_without_replacement(this->chunk_.data(), length, 0, false) != length) {
+      // Cannot happen: the take buffer is longer than the pre-roll.
+      ESP_LOGW(TAG, "The pre-roll does not fit into the take buffer");
+      break;
+    }
+    moved += length;
+  }
+  return moved;
+}
+
+bool TakeStreamer::start_clip(const std::string &trigger) {
+  if (!this->clips_enabled_ || this->preroll_ms_ == 0 || this->is_failed() || this->is_active())
+    return false;
+
+  this->clip_ = true;
+  this->kind_ = "wake";
+  this->speaker_.clear();
+  this->requested_seconds_ = (this->preroll_ms_ + this->postroll_ms_) / 1000.0f;
+  this->take_name_.clear();
+  this->end_reason_.clear();
+  this->error_code_.clear();
+  this->stop_reason_.clear();
+  this->saved_seconds_ = 0.0f;
+  this->detections_ = 0;
+
+  // The clip records from here, before the recorder has even answered: the
+  // audio right after the detection would otherwise be missing. Audio that
+  // arrives while the pre-roll moves goes into the pre-roll buffer only.
+  this->ring_buffer_->reset();
+  this->dropped_bytes_.store(0, std::memory_order_relaxed);
+  this->overflow_.store(false, std::memory_order_relaxed);
+  this->budget_bytes_ = (this->preroll_ms_ + this->postroll_ms_) * BYTES_PER_MS;
+  const uint32_t preroll_bytes = this->take_preroll_();
+  this->captured_bytes_.store(preroll_bytes, std::memory_order_release);
+  this->capturing_.store(true, std::memory_order_release);
+  this->pending_detections_.clear();
+  this->pending_detections_.emplace_back(clean_name(trigger), preroll_bytes / BYTES_PER_MS);
+  this->detections_ = 1;
+
+  if (!this->connect_()) {
+    this->capturing_.store(false, std::memory_order_release);
+    return false;
+  }
   return true;
 }
 
@@ -304,16 +408,21 @@ void TakeStreamer::loop_waiting_accept_() {
     return;
   }
 
-  // The take starts now, so the file begins at a defined moment.
   this->take_name_ = answer_field(line, "name");
-  this->ring_buffer_->reset();
-  this->captured_bytes_.store(0, std::memory_order_relaxed);
-  this->dropped_bytes_.store(0, std::memory_order_relaxed);
-  this->overflow_.store(false, std::memory_order_relaxed);
-  this->budget_bytes_ = static_cast<uint32_t>(this->requested_seconds_ * SAMPLE_RATE) * BYTES_PER_SAMPLE;
-  this->capturing_.store(true, std::memory_order_release);
-  this->microphone_source_->start();
-  this->source_started_ = true;
+  if (!this->clip_) {
+    // The take starts now, so the file begins at a defined moment. A clip
+    // already records since start_clip().
+    this->ring_buffer_->reset();
+    this->captured_bytes_.store(0, std::memory_order_relaxed);
+    this->dropped_bytes_.store(0, std::memory_order_relaxed);
+    this->overflow_.store(false, std::memory_order_relaxed);
+    this->budget_bytes_ = static_cast<uint32_t>(this->requested_seconds_ * SAMPLE_RATE) * BYTES_PER_SAMPLE;
+    this->capturing_.store(true, std::memory_order_release);
+    if (!this->source_started_) {
+      this->microphone_source_->start();
+      this->source_started_ = true;
+    }
+  }
   this->set_state_(State::STREAMING);
   ESP_LOGI(TAG, "Take %s started (%s, %.1f s)", this->take_name_.c_str(), this->kind_.c_str(),
            this->requested_seconds_);
@@ -427,7 +536,8 @@ bool TakeStreamer::handle_final_answer_(const std::string &line) {
 
 void TakeStreamer::stop_capture_() {
   this->capturing_.store(false, std::memory_order_release);
-  if (this->source_started_) {
+  // While clips are enabled the microphone keeps filling the pre-roll.
+  if (this->source_started_ && !this->preroll_filling_.load(std::memory_order_acquire)) {
     this->microphone_source_->stop();
     this->source_started_ = false;
   }

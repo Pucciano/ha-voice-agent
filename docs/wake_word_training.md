@@ -191,6 +191,38 @@ feedback, so nobody adapts their voice to what the current model already
 detects. The satellite still counts its detections; the status shows the
 number at the end.
 
+### Clips of every detection
+
+A take only records while somebody started it, so a false accept in the
+middle of the night is gone for good. The satellite therefore records a clip
+of every wake word detection on its own, as long as `Wake-Word-Mitschnitt` is
+on, which it is after a restart. A clip is four seconds long: two seconds
+from before the detection, kept in a ring buffer on the satellite, and two
+seconds after it. The pre-roll is the point of the clip, because it holds the
+sound the model reacted to; the request capture of the speech recogniser
+starts after the detection and can never show it
+([Jetson runbook, section 9](jetson_setup.md#9-request-capture)).
+
+| Entity | Purpose |
+|---|---|
+| `Wake-Word-Mitschnitt` | On records a clip of every detection; off frees the ring buffer |
+| `Wake-Word-Mitschnitt Status` | The last result, e.g. `Mitschnitt sat_living_room_20261101-181512, 4.0 s`, or an error |
+
+Clips land in `recordings/wake/` on the capture drive and come along with
+`make ww-pull`. Each clip has a sidecar with the detection's offset in
+seconds, which is the length of the pre-roll, plus the peak and RMS level of
+the audio. A clip takes about 128 kB; at the measured rate of one to two
+false accepts a day the drive holds years of them.
+
+Listen to the clips to tell a false accept from a real "Hey AIVI": a false
+accept is a hard negative, the most valuable negative data there is, because
+it is exactly what the current model gets wrong. How loud the room was around
+a detection, and what the level history can and cannot explain, is in
+[microphone levels](microphone_levels.md). The import routes the clips into
+the review folders of section 5; measured over the first three days about
+half of them were real commands, so none is trained on before somebody
+listened to it.
+
 Everyday sound: set `Wake-Word-Aufnahme Art` to `Negativ (Alltag)`
 (30 minutes) and switch the take on. A red light circles. Leave it running
 during normal life: conversations, TV, music, cooking, phone calls. The
@@ -230,6 +262,8 @@ entities:
   - number.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_dauer
   - switch.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme
   - sensor.wohnung_wohnzimmer_aivi_satellit_wake_word_aufnahme_status
+  - switch.wohnung_wohnzimmer_aivi_satellit_wake_word_mitschnitt
+  - sensor.wohnung_wohnzimmer_aivi_satellit_wake_word_mitschnitt_status
 ```
 
 ### Without the Jetson
@@ -326,6 +360,24 @@ are the most useful negatives. Put its file name into
 `dev/datasets/wake_word/recordings/negative_keep.txt` and import again to
 keep it. Training chunks never span a cut, and the held-out quarter becomes
 one track per uninterrupted piece.
+
+The clips of single detections in `recordings/wake/` (section 4) get the
+same window, so a hard negative has the same shape wherever it came from.
+Their names carry a `clip_` prefix. Because about half of the clips are real
+commands, the import decides nothing on its own:
+
+| Where a window lands | Why |
+|---|---|
+| `clips/real_negative/review/` | the normal case: listen to it |
+| `clips/real_positive/review/` | Whisper heard the wake word, so it looks like a real one |
+| `clips/real_negative/train/` | its name is in `recordings/negative_keep.txt` |
+| nowhere | its name is in `recordings/excluded.txt` |
+
+A name on one of the two lists beats both Whisper models, because somebody
+listened. `clips/real_negative/wake_clips.csv` lists every window with its
+level, both transcripts and the verdict. Clips never enter a test split:
+false accepts per hour stay measured on the held-out tracks of the everyday
+recordings, which are uninterrupted audio.
 
 ## 6. Build the features
 
