@@ -283,6 +283,9 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/bedroom_sunrise_alarm.md` covers the sunrise alarm on the bedroom's
   WLED bed light: behaviour, helpers, scene, script, automation and the WLED
   reset preset.
+- `docs/smart_meter.md` covers the smart meter reader on the electricity
+  meter: unlocking the meter, the SML script, MQTT, the Tasmota
+  integration, the energy dashboard and the data check automation.
 - `docs/window_alert.md` covers the window alert: the announcement on the
   satellites when a window is open while it is colder outside, and the push
   notification when the last person leaves.

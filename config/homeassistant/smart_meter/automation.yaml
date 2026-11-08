@@ -1,0 +1,67 @@
+# Home Assistant automation: warn when the smart meter reader stops
+# delivering the full data set. Deployed through the automation config API
+# under its id; keep this copy and Home Assistant in sync. See
+# docs/smart_meter.md.
+#
+# The EMH eHZB sends the full data set (power, kWh with decimals) only while
+# "InF on" is set. After a power loss it starts with the factory setting
+# again, which is the reduced data set: whole kWh and no power. The reader
+# then reports 0 W. The house never draws 0 W (the rack UPS alone draws
+# about 160 W), so 0 W for 15 minutes means the meter fell back, or the read
+# head slipped off the info interface. A reader that is offline for 30
+# minutes gets its own message. The notification disappears once real power
+# readings come back.
+- id: smart_meter_data_check
+  alias: Stromzähler Datenprüfung
+  description: Meldet, wenn der Stromzähler keine Leistung mehr liefert oder der Leser offline ist, und entfernt die Meldung wieder, sobald Werte kommen.
+  mode: queued
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.bitshake_smartmeterreader_ehz_power
+      below: 1
+      for:
+        minutes: 15
+      id: no_power
+    - trigger: state
+      entity_id: sensor.bitshake_smartmeterreader_ehz_power
+      to: unavailable
+      for:
+        minutes: 30
+      id: offline
+    - trigger: numeric_state
+      entity_id: sensor.bitshake_smartmeterreader_ehz_power
+      above: 0
+      for:
+        minutes: 1
+      id: ok
+  actions:
+    - choose:
+        - conditions: "{{ trigger.id == 'no_power' }}"
+          sequence:
+            - action: persistent_notification.create
+              data:
+                notification_id: smart_meter_data_check
+                title: Stromzähler
+                message: >-
+                  Der Stromzähler meldet seit 15 Minuten 0 W
+                  (Zählerstand {{ states('sensor.bitshake_smartmeterreader_ehz_importactive') }} kWh).
+                  Wahrscheinlich ist er nach einem Stromausfall auf den
+                  reduzierten Datensatz zurückgefallen: mit der PIN freischalten
+                  und „InF on“ sowie „PIn OFF“ setzen. Sonst sitzt der Lesekopf
+                  nicht mehr richtig auf der Info-Schnittstelle.
+        - conditions: "{{ trigger.id == 'offline' }}"
+          sequence:
+            - action: persistent_notification.create
+              data:
+                notification_id: smart_meter_data_check
+                title: Stromzähler
+                message: >-
+                  Der Leser am Stromzähler ist seit 30 Minuten nicht erreichbar.
+                  Meist findet er nach einem Neustart nicht ins WLAN zurück; er
+                  startet sich nach etwa 20 Minuten selbst neu. Hilft das nicht,
+                  das USB-Kabel am Zählerschrank kurz ziehen.
+        - conditions: "{{ trigger.id == 'ok' }}"
+          sequence:
+            - action: persistent_notification.dismiss
+              data:
+                notification_id: smart_meter_data_check
