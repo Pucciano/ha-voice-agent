@@ -1,0 +1,192 @@
+# Home Assistant automations: remind us of open windows while it is colder
+# outside (issue #34). Each one is deployed through the automation config
+# API under its id; keep this copy and Home Assistant in sync. See
+# docs/window_alert.md.
+#
+# The radiator thermostats are not in Home Assistant yet, so for now the
+# voice assistant only reminds us to turn the heating off. The room table
+# `rooms` is meant to get each room's climate entity later, so the heating
+# of a room can be switched off while one of its windows is open.
+
+# Every AIVI satellite says once per opening which window has been open for
+# input_number.window_alert_delay minutes, if the outdoor temperature is at
+# least input_number.window_alert_delta below the room temperature and
+# somebody is at home:
+#
+#   "Im Wohnzimmer ist das linke Fenster seit 5 Minuten offen. Draußen sind
+#    es 8 Grad, drinnen 18. Denk an die Heizung."
+#
+# The trigger fires once when the window has stayed open for the delay; if
+# the condition does not hold at that moment, nothing is said for this
+# opening. The outdoor temperature is the measured value of DWD, with met.no
+# as fallback. Missing or non-numeric values say nothing.
+#
+# The announcement plays on the media player "Audioausgang" of every
+# available satellite, found by its entity id, so new satellites need no
+# change here. Through the jack, "AIVI Klinkenausgang" switches the room
+# speaker to its analog input. The voice is the one of the satellites'
+# pipelines.
+- id: window_alert_announcement
+  alias: Fensterhinweis Ansage
+  description: Sagt auf allen AIVI-Satelliten an, wenn ein Fenster offen ist und es draußen deutlich kälter ist als im Raum.
+  mode: queued
+  max: 10
+  triggers:
+    - trigger: state
+      entity_id:
+        - binary_sensor.living_room_window_left_contact
+        - binary_sensor.living_room_window_center_contact
+        - binary_sensor.living_room_window_right_contact
+        - binary_sensor.living_room_balcony_door_contact
+        - binary_sensor.child_room_window_left_contact
+        - binary_sensor.child_room_window_right_contact
+        - binary_sensor.bed_room_window_left_contact
+        - binary_sensor.bed_room_window_right_contact
+        - binary_sensor.office_window_contact
+        - binary_sensor.bathroom_window_contact
+      from: "off"
+      to: "on"
+      for:
+        minutes: "{{ states('input_number.window_alert_delay') | int(5) }}"
+  variables:
+    # Room (area id) -> spoken place, temperature sensor and its contacts
+    # with their spoken names. Keep the contacts in step with the trigger.
+    rooms: &rooms
+      living_room:
+        where: Im Wohnzimmer
+        temperature: sensor.living_room_climate_temperatur
+        contacts:
+          binary_sensor.living_room_window_left_contact: das linke Fenster
+          binary_sensor.living_room_window_center_contact: das mittlere Fenster
+          binary_sensor.living_room_window_right_contact: das rechte Fenster
+          binary_sensor.living_room_balcony_door_contact: die Balkontür
+      child_room:
+        where: Im Kinderzimmer
+        temperature: sensor.kinderzimmer_child_room_climate_temperatur
+        contacts:
+          binary_sensor.child_room_window_left_contact: das linke Fenster
+          binary_sensor.child_room_window_right_contact: das rechte Fenster
+      bed_room:
+        where: Im Schlafzimmer
+        temperature: sensor.bed_room_climate_temperature
+        contacts:
+          binary_sensor.bed_room_window_left_contact: das linke Fenster
+          binary_sensor.bed_room_window_right_contact: das rechte Fenster
+      office:
+        where: Im Arbeitszimmer
+        temperature: sensor.timmerflotte_temp_hmd_sensor_temperatur
+        contacts:
+          binary_sensor.office_window_contact: das Fenster
+      bathroom:
+        where: Im Bad
+        temperature: sensor.bathroom_climate_temperature
+        contacts:
+          binary_sensor.bathroom_window_contact: das Fenster
+    tts_engine: tts.piper_2
+    tts_language: de_DE
+    tts_voice: de_DE-thorsten-medium
+    contact: "{{ trigger.entity_id }}"
+    room: >-
+      {%- set ns = namespace(room={}) -%}
+      {%- for id, r in rooms.items() if contact in r.contacts -%}
+        {%- set ns.room = r -%}
+      {%- endfor -%}
+      {{ ns.room }}
+    indoor: "{{ states(room.temperature) if room.temperature is defined else 'unknown' }}"
+    outdoor: >-
+      {%- set dwd = state_attr('weather.dwd', 'temperature') -%}
+      {{ dwd if is_number(dwd) else state_attr('weather.forecast_zuhause', 'temperature') }}
+    delta: "{{ states('input_number.window_alert_delta') | float(2) }}"
+    minutes: "{{ states('input_number.window_alert_delay') | int(5) }}"
+    players: >-
+      {{ integration_entities('esphome')
+         | select('match', 'media_player[.].*_aivi_satellit_audioausgang$')
+         | select('has_value') | list }}
+  conditions:
+    - alias: Somebody is at home
+      condition: template
+      value_template: "{{ states('zone.home') | int(0) > 0 }}"
+    - alias: Known room, colder outside by at least the delta
+      condition: template
+      value_template: >-
+        {{ room.where is defined and is_number(indoor) and is_number(outdoor)
+           and indoor | float - outdoor | float >= delta | float }}
+    - alias: At least one satellite available
+      condition: template
+      value_template: "{{ players | length > 0 }}"
+  actions:
+    # The message needs numeric temperatures, so it is built after the
+    # conditions.
+    - variables:
+        message: >-
+          {%- macro degrees(value) -%}
+            {%- set t = value | float | round(0) | int -%}
+            {{ 'minus ' ~ t | abs if t < 0 else t }}
+          {%- endmacro -%}
+          {{ room.where }} ist {{ room.contacts[contact] }} seit
+          {{ 'einer Minute' if minutes | int == 1 else minutes ~ ' Minuten' }} offen.
+          Draußen sind es {{ degrees(outdoor) }} Grad, drinnen {{ degrees(indoor) }}.
+          Denk an die Heizung.
+    - action: tts.speak
+      target:
+        entity_id: "{{ tts_engine }}"
+      data:
+        media_player_entity_id: "{{ players }}"
+        message: "{{ message }}"
+        language: "{{ tts_language }}"
+        options:
+          voice: "{{ tts_voice }}"
+
+# When the last person leaves home, that person's iPhone lists every open
+# window and the balcony door, whatever the temperature. "Last" is the person
+# whose state changed most recently. The run does not read trigger data, so
+# it can be tested with automation.trigger.
+- id: window_alert_leaving
+  alias: Fensterhinweis beim Verlassen
+  description: Schickt der Person, die als letzte geht, eine Mitteilung über offene Fenster und die Balkontür.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: zone.home
+      to: "0"
+      not_from:
+        - unknown
+        - unavailable
+  variables:
+    rooms: *rooms
+    # person -> notify action of the person's phone. The repository keeps
+    # placeholders, because the ids carry our names; the deploy puts in the
+    # real ids from a local file (docs/window_alert.md).
+    phones:
+      person.<person-1>: notify.mobile_app_<person-1-phone>
+      person.<person-2>: notify.mobile_app_<person-2-phone>
+    open_contacts: >-
+      {%- set ns = namespace(names=[]) -%}
+      {%- for id, r in rooms.items() -%}
+        {%- for entity in r.contacts if is_state(entity, 'on') -%}
+          {%- set ns.names = ns.names + [state_attr(entity, 'friendly_name') or entity] -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ ns.names }}
+    last_person: >-
+      {%- set ns = namespace(person='', changed=0) -%}
+      {%- for person in phones if states[person] is not none -%}
+        {%- set changed = as_timestamp(states[person].last_changed, 0) -%}
+        {%- if changed > ns.changed -%}
+          {%- set ns.person = person -%}
+          {%- set ns.changed = changed -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.person }}
+  conditions:
+    - alias: A window or the balcony door is open
+      condition: template
+      value_template: "{{ open_contacts | length > 0 }}"
+    - alias: The last person has a phone
+      condition: template
+      value_template: "{{ last_person in phones }}"
+  actions:
+    - action: "{{ phones[last_person] }}"
+      data:
+        title: Fenster offen
+        message: "Noch offen: {{ open_contacts | join(', ') }}."

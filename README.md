@@ -103,9 +103,11 @@ compose/
   dev/docker-compose.override.yml  debug capture and packet inspection
   dev/vllm.config.yaml             vLLM engine configuration for dev
   jetson/                          Jetson Nano speech server (Speech-to-Phrase, Piper, capture relay, wake word recorder)
+  ble_proxy/                       Bluetooth proxy for Home Assistant (Jetson or Raspberry Pi)
 config/homeassistant/              Home Assistant automations, dashboards, helpers and the bedroom alarm
 esphome/                           satellite firmware: device files, packages and local components
 services/
+  ble_proxy/                       ESPHome-compatible Bluetooth proxy on BlueZ, Noise encrypted
   llm_proxy/                       FastAPI proxy with tool-call repair
   stt_bridge/                      Wyoming speech to text through a cloud transcription API
   stt_capture/                     Wyoming relay that stores voice requests for STT training
@@ -198,7 +200,8 @@ scripts/smoke_test_llm_proxy.sh   # dev stack only
 
 On the Jetson Nano (`compose/jetson`), port 10300 serves Speech-to-Phrase,
 10310 the cloud speech-to-text bridge, 10200 Piper and 18001 the
-`llm_proxy` in front of the cloud model.
+`llm_proxy` in front of the cloud model. The Bluetooth proxy
+(`compose/ble_proxy`) serves the ESPHome native API on 6053.
 
 ## llm_proxy
 
@@ -268,6 +271,9 @@ Further setup and operational guides live in the `docs/` directory:
   (Speech-to-Phrase and Piper over Wyoming) for the first test phase, the
   capture of voice requests for STT training, the wake word recorder, the
   LLM proxy and the cloud speech-to-text bridge.
+- `docs/ble_proxy.md` covers the Bluetooth proxy on the Jetson (or a
+  Raspberry Pi): the dongle's driver, the container, the key and the Home
+  Assistant setup for the TV mount and presence.
 - `docs/llm_assistant.md` covers the LLM pipeline for free speech: the
   cloud stage behind the Jetson, the Home Assistant setup, the model
   comparison and the measured latency.
@@ -280,6 +286,12 @@ Further setup and operational guides live in the `docs/` directory:
 - `docs/smart_meter.md` covers the smart meter reader on the electricity
   meter: unlocking the meter, the SML script, MQTT, the Tasmota
   integration, the energy dashboard and the data check automation.
+- `docs/window_alert.md` covers the window alert: the announcement on the
+  satellites when a window is open while it is colder outside, and the push
+  notification when the last person leaves.
+- `docs/microphone_levels.md` reads the microphone level history of a
+  satellite: noise floor, the rhythm of the room, clipping, and what the
+  level says about a single wake word detection.
 
 ## Makefile helpers
 
@@ -293,12 +305,14 @@ make test             # run compileall and basic checks
 make aec-tuning-test  # echo canceller self test engine against a simulated room
 make llm-proxy-test   # llm_proxy against a fake upstream
 make stt-bridge-test  # speech-to-text bridge against a fake API and Home Assistant
+make ble-proxy-test   # Bluetooth proxy against a fake adapter, through aioesphomeapi
 make wall-display-check   # validate the wall display dashboards offline
 make wall-display-deploy HA_ENV=<env-file>   # save changed wall displays (with backup)
 make sat-xvf3800      # one-time XVF3800 I2S firmware flash over USB DFU
 make sat-chip DEVICE=/dev/cu.usbmodemXXXX           # identify the ESP32
 make sat-flash SAT=living-room DEVICE=<port-or-ip>   # build and flash
 make sat-logs SAT=living-room DEVICE=<port-or-ip>    # follow the log
+make sat-levels DAYS=7 HA_ENV=<env-file>   # microphone level history of a satellite
 make ww-setup         # wake word: pinned tools, generators and datasets
 make ww-preview       # a few checked samples per pronunciation and voice
 make ww-samples       # synthetic wake word and confusable samples

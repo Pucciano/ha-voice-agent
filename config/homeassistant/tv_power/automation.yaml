@@ -53,6 +53,13 @@
             - action: script.turn_on
               target:
                 entity_id: script.tv_power_on
+              data:
+                variables:
+                  # "Fernseher ausrichten" asks for its position when it
+                  # starts the TV; otherwise the mount goes to "Couch".
+                  requested_mount_position: >-
+                    {{ trigger.event.data.mount_position | default('')
+                       if trigger.platform == 'event' else '' }}
             - if: "{{ trigger.platform == 'conversation' }}"
               then:
                 - set_conversation_response: >-
@@ -122,6 +129,102 @@
                else 'Der Fernseher startet mit ' ~ trigger.id ~ ', das dauert etwa eine Minute.' }}
       else:
         - set_conversation_response: "{{ trigger.id }} kann ich auf dem Fernseher noch nicht starten."
+
+# "Dreh den Fernseher zur Couch" and the like: script.tv_mount_position
+# drives the Vogel's mount and switches the TV on when needed. The trigger id
+# is the position in the script. Speech-to-Phrase reads these sentence
+# triggers from Home Assistant at every training, so a restart of it is
+# enough after a change.
+# Every sentence names "Fernseher" and a target, so none catches "schalte
+# den Fernseher aus" or a light at the dining table.
+- id: tv_mount_voice
+  alias: Fernseher ausrichten per Sprache
+  description: Dreht den Fernseher per Sprache zur Couch, zum Esstisch oder zur Ottomane oder fährt ihn an die Wand, und sagt, wohin er zeigt.
+  mode: queued
+  triggers:
+    - trigger: conversation
+      command:
+        - "[dreh|drehe|richte|richt|schwenk|schwenke|stell|stelle|fahr|fahre] [bitte] [den] Fernseher [bitte] (zur|zu der|zum|auf die|an die|Richtung|in Richtung) (Couch|Sofa) [aus]"
+        - "[den] Fernseher (zur|zu der|zum|auf die|an die|Richtung|in Richtung) (Couch|Sofa) (drehen|ausrichten|schwenken|stellen|fahren)"
+      id: Couch
+    - trigger: conversation
+      command:
+        - "[dreh|drehe|richte|richt|schwenk|schwenke|stell|stelle|fahr|fahre] [bitte] [den] Fernseher [bitte] (zum|zu dem|an den|auf den|Richtung|in Richtung) (Esstisch|Esszimmer|Tisch) [aus]"
+        - "[den] Fernseher (zum|zu dem|an den|auf den|Richtung|in Richtung) (Esstisch|Esszimmer|Tisch) (drehen|ausrichten|schwenken|stellen|fahren)"
+      id: Esstisch
+    - trigger: conversation
+      command:
+        - "[dreh|drehe|richte|richt|schwenk|schwenke|stell|stelle|fahr|fahre] [bitte] [den] Fernseher [bitte] (zur|zu der|auf die|an die|Richtung|in Richtung) (Ottomane|Ottoman) [aus]"
+        - "[den] Fernseher (zur|zu der|auf die|an die|Richtung|in Richtung) (Ottomane|Ottoman) (drehen|ausrichten|schwenken|stellen|fahren)"
+      id: Ottomane
+    - trigger: conversation
+      command:
+        - "[fahr|fahre|stell|stelle|dreh|drehe|klapp|klappe|schieb|schiebe] [bitte] [den] Fernseher [bitte] (an die|zur|zu der|gegen die) Wand [zurück]"
+        - "[den] Fernseher (an die|zur) Wand (fahren|stellen|klappen|drehen)"
+        - "(klapp|klappe|fahr|fahre) [bitte] [den] Fernseher zurück"
+      id: Wand
+    - trigger: conversation
+      command:
+        - "(wohin|wo hin) (zeigt|schaut) der Fernseher"
+        - "wie (steht|zeigt) der Fernseher"
+        - "wo steht der Fernseher"
+      id: status
+  actions:
+    - variables:
+        mount_select: select.wohnung_wohnzimmer_tv_halterung_aktuelles_preset
+        powered: >-
+          {{ is_state('switch.tv_power', 'on') or is_state('script.tv_power_on', 'on') }}
+        # The select's state is the preset within the mount's tolerance, "0"
+        # at the wall, "unknown" in between and while driving. Rendered "0"
+        # becomes a number, so it is compared as text.
+        current: "{{ states(mount_select) | trim }}"
+        names:
+          Couch: Couch
+          Esstisch: Esstisch
+          Ottomane: Ottomane
+          Wand: "0"
+        towards:
+          Couch: zur Couch
+          Esstisch: zum Esstisch
+          Ottomane: zur Ottomane
+    - if: "{{ trigger.id == 'status' }}"
+      then:
+        - set_conversation_response: >-
+            {%- set at = (names.items() | selectattr(1, 'eq', current | string) | map(attribute=0) | list) -%}
+            {%- if not is_state('switch.tv_power', 'on') -%}
+              Der Fernseher ist aus und steht an der Wand.
+            {%- elif at and at[0] == 'Wand' -%}
+              Der Fernseher steht an der Wand.
+            {%- elif at -%}
+              Der Fernseher zeigt {{ towards[at[0]] }}.
+            {%- else -%}
+              Der Fernseher steht zwischen den Positionen.
+            {%- endif -%}
+        - stop: Answered.
+    - variables:
+        here: "{{ powered and (current | string) == names[trigger.id] }}"
+    - if: "{{ not here and (powered or trigger.id != 'Wand') }}"
+      then:
+        - action: script.turn_on
+          target:
+            entity_id: script.tv_mount_position
+          data:
+            variables:
+              position: "{{ trigger.id }}"
+    - set_conversation_response: >-
+        {%- if trigger.id == 'Wand' and not powered -%}
+          Der Fernseher ist aus und steht an der Wand.
+        {%- elif trigger.id == 'Wand' and here -%}
+          Der Fernseher steht schon an der Wand.
+        {%- elif trigger.id == 'Wand' -%}
+          Der Fernseher fährt an die Wand.
+        {%- elif not powered -%}
+          Der Fernseher startet und dreht sich dann {{ towards[trigger.id] }}, das dauert gut eine Minute.
+        {%- elif here -%}
+          Der Fernseher zeigt schon {{ towards[trigger.id] }}.
+        {%- else -%}
+          Der Fernseher dreht sich {{ towards[trigger.id] }}.
+        {%- endif -%}
 
 # Switched off with the TV's own remote (or anything else): the plug follows
 # after 5 eligible minutes, including after a script or update window ends.

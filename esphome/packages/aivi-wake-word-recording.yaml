@@ -13,6 +13,16 @@
 #   Wake-Word-Aufnahme Dauer     minutes
 #   Wake-Word-Aufnahme Status    what happened last
 #
+# Independently of the takes the satellite records a clip of every wake word
+# detection (issue #2): 2 s from before the detection, which the component
+# keeps in a ring buffer, plus 2 s after it. The clips land in
+# recordings/wake/ and are the only recording that holds the sound a false
+# accept reacted to, so they can become hard negatives for the next training
+# run. The switch is on after a restart; a clip takes about 128 kB.
+#
+#   Wake-Word-Mitschnitt         switch: record a clip of every detection
+#   Wake-Word-Mitschnitt Status  what happened to the last clip
+#
 # During a "Hey AIVI" take the wake word does not start the assistant and
 # gives no feedback, so speakers do not adapt to the current model; during
 # an everyday take the assistant works as usual. Every detection during a
@@ -37,9 +47,26 @@ take_streamer:
   host: !secret wake_word_recorder_host
   token: !secret wake_word_recorder_token
   satellite_id: ${satellite_id}
+  clip_preroll: 2s
+  clip_postroll: 2s
   on_status:
     - lambda: |-
         auto *take = id(wake_word_take);
+        if (take->is_clip()) {
+          // A clip runs on its own; only its result is worth showing.
+          char clip[120];
+          if (status == "saved") {
+            snprintf(clip, sizeof(clip), "Mitschnitt %s, %.1f s",
+                     take->take_name().c_str(), take->saved_seconds());
+          } else if (status == "error") {
+            snprintf(clip, sizeof(clip), "Mitschnitt fehlgeschlagen: %s",
+                     take->error_code().c_str());
+          } else {
+            return;
+          }
+          id(wake_clip_status).publish_state(clip);
+          return;
+        }
         const bool recording = status == "recording";
         id(assistant_paused) = recording && take->is_positive();
         id(recording_mode) = recording ? (take->is_positive() ? 1 : 2) : 0;
@@ -92,12 +119,18 @@ esphome:
         - text_sensor.template.publish:
             id: wake_word_take_status
             state: Bereit
+        - text_sensor.template.publish:
+            id: wake_clip_status
+            state: Bereit
 
 micro_wake_word:
   on_wake_word_detected:
     # Added to the actions of aivi-voice-input.yaml: every detection during a
     # take, also one during a running pipeline, goes into the sidecar.
     - lambda: id(wake_word_take).mark_detection(wake_word);
+    # Outside a take the detection gets a clip of its own; the call does
+    # nothing while a take runs or when the switch is off.
+    - lambda: id(wake_word_take).start_clip(wake_word);
 
 respeaker_xvf3800:
   mute_switch:
@@ -124,6 +157,21 @@ switch:
               id(wake_word_take_minutes).state * 60.0f);
     turn_off_action:
       - lambda: id(wake_word_take).stop_take("stopped");
+
+  - platform: template
+    id: wake_clip_switch
+    name: Wake-Word-Mitschnitt
+    icon: mdi:waveform
+    entity_category: config
+    optimistic: true
+    # On after a restart: a false accept is gone for good if nobody was
+    # recording when it happened. The microphone keeps the pre-roll filled
+    # while this is on.
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - lambda: id(wake_word_take).set_clips_enabled(true);
+    turn_off_action:
+      - lambda: id(wake_word_take).set_clips_enabled(false);
 
 select:
   - platform: template
@@ -178,4 +226,10 @@ text_sensor:
     id: wake_word_take_status
     name: Wake-Word-Aufnahme Status
     icon: mdi:record-rec
+    update_interval: never
+
+  - platform: template
+    id: wake_clip_status
+    name: Wake-Word-Mitschnitt Status
+    icon: mdi:waveform
     update_interval: never

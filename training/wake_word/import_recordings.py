@@ -20,6 +20,13 @@ each "Hey AIVI" detection is cut out, because someone may have said the wake
 word, and saved to clips/real_negative/review/. A window that turns out to be
 a false accept goes back into the training when its clip name is listed in
 recordings/negative_keep.txt.
+
+Clips of single detections in recordings/wake/ hold the pre-roll from before
+one detection, the only recording of what a false accept reacted to. About
+half of them are real commands, so none is imported blindly: the window
+around the detection goes to clips/real_negative/review/, or to
+clips/real_positive/review/ when Whisper hears the wake word in it. Listen
+to them and list a confirmed false accept in recordings/negative_keep.txt.
 """
 
 import argparse
@@ -476,6 +483,133 @@ def import_negative(config: dict, paths: Paths) -> None:
         )
 
 
+def wake_clip_rows(config: dict, source: Path) -> list[tuple[dict, np.ndarray]]:
+    """Row and audio of the window around every detection clip's detection.
+
+    The window is the one an everyday recording gets, so a hard negative
+    has the same shape whichever folder it came from. The clip name is
+    prefixed, because a take and a clip of the same second would otherwise
+    write the same review file.
+    """
+
+    settings = config["recordings"]
+    items = []
+    for clip in audio_files(source):
+        audio = read_audio(clip)
+        name = clip.relative_to(source).with_suffix("").as_posix()
+        name = f"clip_{name.replace('/', '__')}"
+        windows = wake_word_windows(clip, name, len(audio), settings)
+        if not windows:
+            _LOGGER.warning("%s: no detection in the sidecar", clip.name)
+            continue
+        for start, end, window in windows:
+            cut = audio[start:end]
+            items.append(
+                (
+                    {
+                        "clip": window,
+                        "verdict": "",
+                        "speaker": "",
+                        "recording": str(clip.relative_to(REPO_ROOT)),
+                        "start_s": f"{start / SAMPLE_RATE:.2f}",
+                        "duration_s": f"{(end - start) / SAMPLE_RATE:.2f}",
+                        "peak_dbfs": f"{dbfs(cut):.1f}",
+                        "transcript_en": "",
+                        "transcript_de": "",
+                    },
+                    cut,
+                )
+            )
+    return items
+
+
+def wake_verdict(
+    row: dict, check: SpeechCheck, pattern: str, lists: dict[str, set[str]]
+) -> str:
+    """Where the window of a detection clip belongs.
+
+    A name the listener put on a list decides; otherwise Whisper does,
+    because a window it hears the wake word in is a true positive and must
+    never be trained on as a negative.
+    """
+
+    if row["clip"] in lists["excluded"]:
+        return "excluded"
+    if row["clip"] in lists["keep"]:
+        return "negative"
+    if check.matches(pattern, row["transcript_en"]) or check.matches(
+        pattern, row["transcript_de"]
+    ):
+        return "positive review"
+    return "review"
+
+
+def report_wake(rows: list[dict], target: Path) -> None:
+    """List every window in wake_clips.csv and log what needs a listen."""
+
+    listing = target / "wake_clips.csv"
+    with listing.open("w", newline="", encoding="utf-8") as out:
+        writer = csv.DictWriter(out, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
+    _LOGGER.info(
+        "Detection clips: %s; every window is in %s",
+        ", ".join(f"{n} {v}" for v, n in sorted(counts.items())),
+        listing.relative_to(REPO_ROOT),
+    )
+    for row in rows:
+        if row["verdict"].endswith("review"):
+            _LOGGER.info(
+                "%s %s: %r / %r",
+                row["verdict"],
+                row["clip"],
+                row["transcript_en"],
+                row["transcript_de"],
+            )
+
+
+def import_wake(config: dict, paths: Paths, check: SpeechCheck) -> None:
+    """Route the windows of the detection clips into the review folders.
+
+    Nothing is imported unseen, because the folder holds both classes in
+    about equal measure: training on it blindly would teach the model to
+    reject its own wake word. A window waits in a review folder until
+    somebody listened to it and listed it, and the clips never enter a test
+    split, so false accepts per hour stay measured on the held-out tracks
+    of the everyday recordings.
+    """
+
+    source = paths.recordings / "wake"
+    items = wake_clip_rows(config, source) if source.is_dir() else []
+    if not items:
+        _LOGGER.info("No detection clips in %s", source)
+        return
+    # One Whisper model after the other: MLX keeps only one loaded.
+    for row, clip in items:
+        row["transcript_en"] = check.transcribe(clip)
+    for row, clip in items:
+        row["transcript_de"] = check.transcribe_second(clip)
+
+    lists = {
+        "keep": name_list(paths.recordings / "negative_keep.txt"),
+        "excluded": name_list(paths.recordings / "excluded.txt"),
+    }
+    targets = {
+        "negative": paths.clips / "real_negative" / "train",
+        "review": paths.clips / "real_negative" / "review",
+        "positive review": paths.clips / "real_positive" / "review",
+    }
+    pattern = config["recordings"]["wake_word_pattern"]
+    for row, clip in items:
+        row["verdict"] = wake_verdict(row, check, pattern, lists)
+        if row["verdict"] in targets:
+            write_wav(targets[row["verdict"]] / row["clip"], clip)
+    report_wake([row for row, _ in items], paths.clips / "real_negative")
+
+
 def main() -> None:
     """Import positive and negative recordings."""
 
@@ -483,10 +617,11 @@ def main() -> None:
     setup_logging(args.verbose)
     config = load_config()
     paths = Paths.from_config(config)
-    import_positive(
-        config, paths, SpeechCheck(config["samples"]["check"], paths)
-    )
+    check = SpeechCheck(config["samples"]["check"], paths)
+    import_positive(config, paths, check)
     import_negative(config, paths)
+    # Last: both imports above reset the folders it writes into.
+    import_wake(config, paths, check)
 
 
 if __name__ == "__main__":

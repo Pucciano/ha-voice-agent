@@ -1,0 +1,36 @@
+# Helpers of the window alert (issue #34), in the shape of
+# configuration.yaml. In Home Assistant they are UI helpers (Settings ->
+# Devices & services -> Helpers), created through the websocket command
+# `input_number/create`; keep this copy and Home Assistant in sync. See
+# docs/window_alert.md.
+#
+# A UI helper takes its entity id from the name it is created with, so each
+# one is created with its key as the name and renamed afterwards. Neither has
+# an `initial` value: that would replace the restored state after every
+# restart. The first values (2 °C, 5 minutes) are set once after creating
+# them.
+#
+# Neither entity is exposed to Assist, so their names stay out of the
+# Speech-to-Phrase vocabulary.
+
+input_number:
+  # The announcement needs the outdoor temperature at least this far below
+  # the room temperature.
+  window_alert_delta:
+    name: Fensterhinweis Temperaturdifferenz
+    min: 0.5
+    max: 10
+    step: 0.5
+    mode: box
+    unit_of_measurement: °C
+    icon: mdi:thermometer-minus
+  # How long a window has to stay open before the announcement. It is read
+  # when the window opens.
+  window_alert_delay:
+    name: Fensterhinweis Wartezeit
+    min: 1
+    max: 30
+    step: 1
+    mode: box
+    unit_of_measurement: min
+    icon: mdi:timer-outline
