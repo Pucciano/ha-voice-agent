@@ -219,11 +219,13 @@ def main() -> None:
         config["evaluation"]["cooldown_s"],
     )
     source = paths.recordings / "negative"
-    results = []
+    target = paths.data / "review" / "candidates.json"
+    results, scanned = [], set()
     for recording in sorted(source.glob("*.wav")):
         started = take_start(recording)
         if args.since and (started is None or started.date() < args.since):
             continue
+        scanned.add(recording.relative_to(source).as_posix())
         audio = read_audio(recording)
         found = whisper_candidates(audio, args.whisper, args.language)
         found += model_candidates(audio, detector, args.cutoff)
@@ -242,7 +244,16 @@ def main() -> None:
                     **candidate,
                 }
             )
-    target = paths.data / "review" / "candidates.json"
+    # Candidates of takes outside this run stay, so a scan of the newest
+    # takes does not drop places already rated on the review page.
+    if target.is_file():
+        earlier = json.loads(target.read_text(encoding="utf-8"))
+        results += [
+            candidate
+            for candidate in earlier.get("candidates", [])
+            if candidate["recording"] not in scanned
+        ]
+        results.sort(key=lambda item: (item["recording"], item["offset_s"]))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(

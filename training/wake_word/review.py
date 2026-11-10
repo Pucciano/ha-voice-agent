@@ -69,6 +69,14 @@ def window_name(stem: str, offset_s: float, kind: str = "wake") -> str:
     return f"{stem}__{kind}_{round(offset_s * 1000):08d}.wav"
 
 
+def kind_of(name: str) -> str:
+    """The kind of a window, from its name."""
+
+    if "__scan_" in name:
+        return "scan"
+    return "clip" if name.startswith("clip_") else "take"
+
+
 def read_json(path: Path, default):
     """JSON content of a file, or the default if it is missing or broken."""
 
@@ -360,16 +368,18 @@ class Review:
 
         keep, excluded, cut = [], [], []
         for item_id, entry in self.ratings.items():
-            item = self.by_id.get(item_id)
             verdict = entry.get("verdict")
-            if item is None or verdict is None:
+            if verdict is None:
                 continue
-            if item["kind"] == "scan":
+            # A rated window that is gone from the page, e.g. after a new
+            # scan, still counts: its name tells its kind.
+            kind = self.by_id.get(item_id, {}).get("kind") or kind_of(item_id)
+            if kind == "scan":
                 if verdict in ("e", "u", "x"):
                     cut.append(item_id)
             elif verdict == "f":
                 keep.append(item_id)
-            elif verdict == "x" and item["kind"] == "clip":
+            elif verdict == "x" and kind == "clip":
                 excluded.append(item_id)
         recordings = self.paths.recordings
         write_block(
