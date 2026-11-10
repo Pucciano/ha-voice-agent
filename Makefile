@@ -5,7 +5,7 @@
 	sat-config sat-compile sat-flash sat-diag sat-logs sat-chip sat-xvf3800 \
 	sat-levels \
 	ww-setup ww-preview ww-samples ww-record ww-record-negative ww-pull \
-	ww-import ww-features ww-train ww-evaluate
+	ww-import ww-scan ww-review ww-features ww-train ww-evaluate
 
 ESPHOME_VERSION := 2026.9.0
 ESPHOME := uvx --from esphome==$(ESPHOME_VERSION) esphome
@@ -22,6 +22,7 @@ SAT_DEVICE = $(if $(DEVICE),--device $(DEVICE))
 WW := uv run --project training/wake_word python training/wake_word
 TAKES ?= 1
 WW_TAKES_REMOTE := /mnt/aivi-capture/drive/aivi-wake-word/recordings/
+WW_STT_REMOTE := /mnt/aivi-capture/drive/aivi-stt/
 
 # Wall display dashboards, see docs/wall_display.md. HA_ENV is a file with
 # HA_URL and HA_TOKEN; YES=1 saves without asking.
@@ -157,9 +158,21 @@ ww-pull:
 	rsync -av --ignore-existing --exclude '*.part' \
 		$(if $(MOVE),--remove-source-files) \
 		aivi@$(JETSON):$(WW_TAKES_REMOTE) dev/datasets/wake_word/recordings/
+	# Only the metadata of the STT captures: the review page shows what was
+	# understood after a detection. MOVE does not apply to them.
+	rsync -am --ignore-existing --include '*/' --include 'metadata.json' \
+		--exclude '*' aivi@$(JETSON):$(WW_STT_REMOTE) dev/datasets/wake_word/stt/
 
 ww-import:
 	$(WW)/import_recordings.py
+
+# Search everyday takes for wake words the satellite missed; SINCE=YYYY-MM-DD.
+ww-scan:
+	$(WW)/scan_negatives.py $(if $(SINCE),--since $(SINCE))
+
+# Rate every wake word window by ear on a local page; Ctrl-C ends it.
+ww-review:
+	$(WW)/review.py
 
 ww-features:
 	$(WW)/build_features.py
