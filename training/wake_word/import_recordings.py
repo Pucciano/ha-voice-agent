@@ -27,12 +27,18 @@ half of them are real commands, so none is imported blindly: the window
 around the detection goes to clips/real_negative/review/, or to
 clips/real_positive/review/ when Whisper hears the wake word in it. Listen
 to them and list a confirmed false accept in recordings/negative_keep.txt.
+
+A wake word the satellite missed is not in any sidecar. `make ww-scan`
+finds such places in the everyday takes and `make ww-review` lists the
+ones that hold a wake word in recordings/negative_cut.txt; they are cut
+like a detection.
 """
 
 import argparse
 import csv
 import json
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -420,8 +426,37 @@ def write_held_out(
     return sum(end - start for start, end in pieces) / SAMPLE_RATE
 
 
+def listed_windows(
+    name: str, length: int, settings: dict, cut: set[str]
+) -> list[tuple[int, int, str]]:
+    """Windows of a recording listed in negative_cut.txt.
+
+    The review page lists a place there when it holds a wake word the
+    satellite missed; the name gives the offset in milliseconds, as for a
+    detection.
+    """
+
+    before, after = settings["negative_cut_window_s"]
+    pattern = re.compile(rf"^{re.escape(name)}__scan_(\d+)\.wav$")
+    windows = []
+    for clip in cut:
+        match = pattern.match(clip)
+        if not match:
+            continue
+        offset = int(match.group(1)) / 1000
+        start = max(0, int((offset - before) * SAMPLE_RATE))
+        end = min(length, int((offset + after) * SAMPLE_RATE))
+        if start < end:
+            windows.append((start, end, clip))
+    return windows
+
+
 def split_negative(
-    recording: Path, source: Path, target: Path, settings: dict, keep: set
+    recording: Path,
+    source: Path,
+    target: Path,
+    settings: dict,
+    lists: dict[str, set[str]],
 ) -> dict[str, float]:
     """Review windows, training chunks and held-out tracks of a recording.
 
@@ -431,11 +466,16 @@ def split_negative(
     audio = read_audio(recording)
     name = recording.relative_to(source).with_suffix("").as_posix()
     name = name.replace("/", "__")
-    windows = [
-        window
-        for window in wake_word_windows(recording, name, len(audio), settings)
-        if window[2] not in keep
-    ]
+    windows = sorted(
+        [
+            window
+            for window in wake_word_windows(
+                recording, name, len(audio), settings
+            )
+            if window[2] not in lists["keep"]
+        ]
+        + listed_windows(name, len(audio), settings, lists["cut"])
+    )
     for start, end, clip in windows:
         write_wav(target / "review" / clip, audio[start:end])
     pieces = outside(len(audio), [window[:2] for window in windows])
@@ -459,11 +499,14 @@ def import_negative(config: dict, paths: Paths) -> None:
     source = paths.recordings / "negative"
     target = paths.clips / "real_negative"
     reset_directory(target)
-    keep = name_list(paths.recordings / "negative_keep.txt")
+    lists = {
+        "keep": name_list(paths.recordings / "negative_keep.txt"),
+        "cut": name_list(paths.recordings / "negative_cut.txt"),
+    }
     totals = {"windows": 0.0, "cut": 0.0, "train": 0.0, "test": 0.0}
     for recording in audio_files(source) if source.is_dir() else []:
         result = split_negative(
-            recording, source, target, config["recordings"], keep
+            recording, source, target, config["recordings"], lists
         )
         for key, value in result.items():
             totals[key] += value

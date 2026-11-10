@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wake-Word-Review</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--fg:#1d1d1b;--muted:#6b6a66;--line:#e2e0da;--accent:#2f5d8a;
+--f:#b4432f;--e:#2e7d4f;--u:#a07a12;--x:#6a4c93;--sel:#eef3f8;--warn:#b4432f}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--fg:#ecebe6;--muted:#9a9891;--line:#33322f;--accent:#7fa8d1;
+--f:#e0705c;--e:#5fbf86;--u:#d9b048;--x:#a78bd0;--sel:#24303b;--warn:#e0705c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 16px}
+h1{font-size:18px;margin:0 0 4px}
+.bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;color:var(--muted);font-size:13px}
+.bar label{display:flex;gap:6px;align-items:center}
+select{font:inherit;font-size:13px;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+progress{width:160px}
+main{max-width:860px;margin:0 auto;padding:12px 16px 40px}
+.help{color:var(--muted);font-size:13px;margin:4px 0 12px}
+kbd{border:1px solid var(--line);border-radius:4px;padding:0 4px;font-size:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
+.card.active{outline:2px solid var(--accent);background:var(--sel)}
+.top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.when{font-weight:600}
+.meta{color:var(--muted);font-size:13px}
+.players{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0}
+.players div{font-size:12px;color:var(--muted)}
+audio{width:100%}
+.info{font-size:13px;margin:4px 0}
+.info b{font-weight:600}
+.warn{color:var(--warn);font-size:13px;margin:4px 0}
+.btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+button{font:inherit;font-size:13px;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:6px;padding:5px 10px;cursor:pointer}
+button.on[data-v=f]{background:var(--f);border-color:var(--f);color:#fff}
+button.on[data-v=e]{background:var(--e);border-color:var(--e);color:#fff}
+button.on[data-v=u]{background:var(--u);border-color:var(--u);color:#fff}
+button.on[data-v=x]{background:var(--x);border-color:var(--x);color:#fff}
+input.note{flex:1;min-width:160px;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg)}
+#status{color:var(--muted)}
+#status.error{color:var(--warn)}
+@media (max-width:600px){.players{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+<h1>Wake-Word-Review</h1>
+<div class="bar">
+<span id="count"></span><progress id="prog"></progress>
+<label>Art <select id="kind"><option value="">alle</option><option value="clip">Einzelclips</option><option value="take">Erkennungen in Alltagsaufnahmen</option><option value="scan">Suchlauf ohne Erkennung</option></select></label>
+<label><input type="checkbox" id="onlyOpen"> nur unbewertete</label>
+<span id="status">Jede Bewertung wird sofort gespeichert.</span>
+</div>
+</header>
+<main>
+<p class="help">Das <b>Fenster</b> ist genau das, was ins Training geht. Der zweite Player spielt den Kontext.
+Tasten: <kbd>Leertaste</kbd> Fenster, <kbd>K</kbd> Kontext, <kbd>1</kbd> kein Wake Word (Fehlauslöser), <kbd>2</kbd> echtes „Hey AIVI“, <kbd>3</kbd> unklar, <kbd>4</kbd> enthält beides, <kbd>↓</kbd>/<kbd>↑</kbd> nächstes/voriges.</p>
+<div id="list"></div>
+</main>
+<script>
+const KINDS = {clip: "Einzelclip", take: "Erkennung in Alltagsaufnahme", scan: "Suchlauf, keine Erkennung"};
+const LABELS = {f: "kein Wake Word", e: "echtes Hey AIVI", u: "unklar", x: "enthält beides"};
+// What each rating does, per kind of window.
+const EFFECT = {
+  clip: {f: "wird Negativbeispiel", e: "bleibt draußen", u: "bleibt draußen", x: "wird ausgeschlossen"},
+  take: {f: "wird Negativbeispiel", e: "wird herausgeschnitten", u: "wird herausgeschnitten", x: "wird herausgeschnitten"},
+  scan: {f: "bleibt im Training", e: "wird herausgeschnitten", u: "wird herausgeschnitten", x: "wird herausgeschnitten"},
+};
+let ITEMS = [], ratings = {}, listedByHand = {keep: [], excluded: [], cut: []};
+let active = 0;
+const list = document.getElementById("list");
+const statusEl = document.getElementById("status");
+
+function esc(t) { return String(t ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
+function fmt(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString("de-DE", {weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit"});
+}
+function conflict(it, v) {
+  if (!v) return "";
+  if (v !== "f" && listedByHand.keep.includes(it.id)) return "Steht von Hand in negative_keep.txt und würde trotzdem als Negativbeispiel trainiert. Bitte die Zeile dort löschen.";
+  if (v === "f" && listedByHand.excluded.includes(it.id)) return "Steht von Hand in excluded.txt und wird deshalb nicht trainiert.";
+  return "";
+}
+function visible() {
+  const only = document.getElementById("onlyOpen").checked;
+  const kind = document.getElementById("kind").value;
+  return ITEMS.map((it, i) => [it, i]).filter(([it]) => (!only || !(ratings[it.id] || {}).verdict) && (!kind || it.kind === kind));
+}
+function render() {
+  list.innerHTML = "";
+  for (const [it, i] of visible()) {
+    const r = ratings[it.id] || {};
+    const c = document.createElement("div");
+    c.className = "card" + (i === active ? " active" : "");
+    c.dataset.i = i;
+    const contextLabel = it.kind === "clip" ? "ganzer Clip (Erkennung bei " + it.detected_s.toFixed(1) + " s)" : "Kontext (10 s)";
+    const warn = conflict(it, r.verdict);
+    c.innerHTML = `
+      <div class="top"><span class="when">${fmt(it.when)}</span><span class="meta">${KINDS[it.kind]} · ${it.level} dBFS · ${esc(it.id)}</span></div>
+      <div class="players">
+        <div>Fenster (Training)<audio preload="none" controls src="/audio?id=${encodeURIComponent(it.id)}" data-role="w"></audio></div>
+        <div>${contextLabel}<audio preload="none" controls src="/audio?id=${encodeURIComponent(it.id)}&part=context" data-role="k"></audio></div>
+      </div>
+      ${it.after ? `<div class="info"><b>Danach verstanden:</b> ${esc(it.after)}</div>` : ""}
+      ${it.whisper ? `<div class="info"><b>${it.kind === "scan" ? "Fundstelle" : "Whisper im Fenster"}:</b> ${esc(it.whisper)}</div>` : ""}
+      ${r.verdict ? `<div class="info"><b>Folge:</b> ${EFFECT[it.kind][r.verdict]}</div>` : ""}
+      ${warn ? `<div class="warn">${esc(warn)}</div>` : ""}
+      <div class="btns">
+        ${Object.entries(LABELS).map(([v, l], n) => `<button data-v="${v}" class="${r.verdict === v ? "on" : ""}">${n + 1} ${l}</button>`).join("")}
+        <input class="note" placeholder="Notiz (optional)" value="${esc(r.note || "")}">
+      </div>`;
+    c.addEventListener("click", () => setActive(i, false));
+    c.querySelectorAll("button").forEach(b => b.addEventListener("click", ev => { ev.stopPropagation(); setActive(i, false); rate(i, b.dataset.v); }));
+    const note = c.querySelector(".note");
+    note.addEventListener("click", ev => ev.stopPropagation());
+    note.addEventListener("change", () => send(it.id, (ratings[it.id] || {}).verdict ?? null, note.value));
+    list.appendChild(c);
+  }
+  const done = ITEMS.filter(it => (ratings[it.id] || {}).verdict).length;
+  document.getElementById("count").textContent = `${done} von ${ITEMS.length} bewertet`;
+  const p = document.getElementById("prog"); p.max = ITEMS.length || 1; p.value = done;
+}
+function card(i) { return list.querySelector(`.card[data-i="${i}"]`); }
+function setActive(i, scroll = true) {
+  card(active)?.classList.remove("active");
+  active = i;
+  const c = card(active);
+  if (c) { c.classList.add("active"); if (scroll) c.scrollIntoView({block: "center", behavior: "smooth"}); }
+}
+function step(delta) {
+  const shown = visible().map(([, i]) => i);
+  if (!shown.length) return;
+  const at = shown.indexOf(active);
+  const next = at < 0 ? shown[0] : shown[Math.max(0, Math.min(shown.length - 1, at + delta))];
+  setActive(next);
+}
+async function send(id, verdict, note) {
+  try {
+    const res = await fetch("/api/rate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id, verdict, note})});
+    if (!res.ok) throw new Error(await res.text());
+    if (verdict === null && !note) delete ratings[id]; else ratings[id] = {verdict, note};
+    statusEl.textContent = "Gespeichert."; statusEl.className = "";
+  } catch (e) {
+    statusEl.textContent = "Nicht gespeichert: läuft `make ww-review` noch?"; statusEl.className = "error";
+  }
+}
+async function rate(i, v) {
+  const it = ITEMS[i];
+  const old = ratings[it.id] || {};
+  await send(it.id, old.verdict === v ? null : v, old.note || "");
+  const keep = active; render(); setActive(keep, false);
+}
+function play(role) {
+  document.querySelectorAll("audio").forEach(a => a.pause());
+  const a = card(active)?.querySelector(`audio[data-role="${role}"]`);
+  if (a) { a.currentTime = 0; a.play(); }
+}
+document.addEventListener("keydown", ev => {
+  if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
+  const k = ev.key.toLowerCase();
+  if (k === " ") { ev.preventDefault(); play("w"); }
+  else if (k === "k") play("k");
+  else if (["1", "2", "3", "4"].includes(k)) rate(active, "feux"[+k - 1]);
+  else if (k === "arrowdown" || k === "j") { ev.preventDefault(); step(1); }
+  else if (k === "arrowup") { ev.preventDefault(); step(-1); }
+});
+document.getElementById("onlyOpen").addEventListener("change", render);
+document.getElementById("kind").addEventListener("change", render);
+fetch("/api/state").then(r => r.json()).then(state => {
+  ITEMS = state.items; ratings = state.ratings; listedByHand = state.listed;
+  render();
+}).catch(() => { statusEl.textContent = "Server nicht erreichbar: `make ww-review` starten."; statusEl.className = "error"; });
+</script>
+</body>
+</html>

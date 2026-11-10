@@ -379,6 +379,59 @@ level, both transcripts and the verdict. Clips never enter a test split:
 false accepts per hour stay measured on the held-out tracks of the everyday
 recordings, which are uninterrupted audio.
 
+### Rate the windows on the review page
+
+Listening with `afplay` and copying names into the lists is slow and easy to
+get wrong. The review page does both:
+
+```bash
+make ww-review
+```
+
+It starts a small server on `http://127.0.0.1:8765/` (this machine only) and
+opens the page. It lists every window that decides what the training sees:
+the clips of single detections, the detections in everyday takes, and the
+candidates of `make ww-scan` (below). Each window has two players, the
+window exactly as the training gets it and the sound around it, plus what
+the speech recognition understood right after a detection (from the STT
+capture metadata that `make ww-pull` fetches), Whisper's transcript and the
+level. The keys `1` to `4` rate the active window, space plays it, `K` plays
+the context and the arrow keys move on. Ctrl-C in the terminal ends it.
+
+| Rating | Detection clip | Detection in a take | Scan candidate |
+|---|---|---|---|
+| `1` no wake word | negative (`negative_keep.txt`) | negative (`negative_keep.txt`) | stays in the training |
+| `2` real "Hey AIVI" | stays out | cut | cut (`negative_cut.txt`) |
+| `3` unclear | stays out | cut | cut (`negative_cut.txt`) |
+| `4` both | never used (`excluded.txt`) | cut | cut (`negative_cut.txt`) |
+
+Every rating is saved at once in `recordings/review.json`, and the server
+rewrites its own marked block in the three lists. Lines outside the block
+stay as they are, so a name listed by hand still counts; the page warns when
+such a line contradicts a rating. Run `make ww-import` afterwards.
+
+### Find wake words the satellite missed
+
+A "Hey AIVI" in an everyday take that the satellite did not detect is in no
+sidecar, so it would become a negative and teach the model to ignore its own
+wake word. Scan the takes before training on them:
+
+```bash
+make ww-scan SINCE=2026-11-04
+```
+
+Whisper (`whisper-small`, German) transcribes every take with word times,
+and every word that sounds like the wake word ("Hey Ivy", "Hey, I.B.",
+"AIVI", "Hey Baby") becomes a candidate. The model on the satellite
+(`esphome/models/hey_aivi.tflite`) also runs over the take, and every peak
+of its sliding mean above 0.5 (`--cutoff`) becomes one, far below the
+satellite's own cutoff. Places within 2 s of a detection are skipped, since
+the review page lists them already. The candidates go to
+`dev/datasets/wake_word/review/candidates.json` and appear on the review
+page; a candidate rated as a wake word, unclear or both is cut from the take
+on the next import, like a detection. Five hours of takes take about two
+minutes on the M5.
+
 ## 6. Build the features
 
 ```bash
